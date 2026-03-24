@@ -1,0 +1,11 @@
+{
+  "name": "erionn-mq-integration",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "node amqplib-smoke.mjs"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.5"
+  }
+}

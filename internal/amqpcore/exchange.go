@@ -22,11 +22,12 @@ type Exchange struct {
 }
 
 // newExchange constructs an Exchange. Use the broker's DeclareExchange instead.
-func newExchange(name string, kind ExchangeType, durable, autoDelete bool) *Exchange {
+func newExchange(name string, kind ExchangeType, durable, autoDelete, internal bool) *Exchange {
 	return &Exchange{
 		Name:       name,
 		Type:       kind,
 		Durable:    durable,
 		AutoDelete: autoDelete,
+		Internal:   internal,
 	}
 }

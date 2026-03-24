@@ -3,6 +3,7 @@ package amqpcore
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 
 	"erionn-mq/internal/store"
@@ -44,33 +45,33 @@ func (b *Broker) registerDefaultExchanges() {
 		name string
 		kind ExchangeType
 	}{
-		{"", ExchangeDirect},        // default direct exchange
+		{"", ExchangeDirect}, // default direct exchange
 		{"amq.direct", ExchangeDirect},
 		{"amq.topic", ExchangeTopic},
 		{"amq.fanout", ExchangeFanout},
 	}
 	for _, d := range defaults {
-		b.exchanges[d.name] = newExchange(d.name, d.kind, true, false)
+		b.exchanges[d.name] = newExchange(d.name, d.kind, true, false, false)
 	}
 }
 
 // --- Exchange ---
 
 // DeclareExchange creates or verifies an exchange.
-// If the exchange already exists with the same type, it is a no-op (idempotent).
-// Attempting to redeclare with a different type returns an error.
-func (b *Broker) DeclareExchange(name string, kind ExchangeType, durable, autoDelete bool) (*Exchange, error) {
+// If the exchange already exists with the same attributes, it is a no-op (idempotent).
+// Attempting to redeclare with different attributes returns an error.
+func (b *Broker) DeclareExchange(name string, kind ExchangeType, durable, autoDelete, internal bool) (*Exchange, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	if ex, ok := b.exchanges[name]; ok {
-		if ex.Type != kind {
-			return nil, fmt.Errorf("exchange %q already declared with type %q", name, ex.Type)
+		if ex.Type != kind || ex.Durable != durable || ex.AutoDelete != autoDelete || ex.Internal != internal {
+			return nil, fmt.Errorf("exchange %q already declared with different attributes", name)
 		}
 		return ex, nil
 	}
 
-	ex := newExchange(name, kind, durable, autoDelete)
+	ex := newExchange(name, kind, durable, autoDelete, internal)
 	b.exchanges[name] = ex
 	return ex, nil
 }
@@ -95,11 +96,15 @@ func (b *Broker) DeclareQueue(name string, durable, exclusive, autoDelete bool, 
 	defer b.mu.Unlock()
 
 	if q, ok := b.queues[name]; ok {
+		if q.Durable != durable || q.Exclusive != exclusive || q.AutoDelete != autoDelete || !reflect.DeepEqual(q.Args, args) {
+			return nil, fmt.Errorf("queue %q already declared with different attributes", name)
+		}
 		return q, nil
 	}
 
 	q := newQueue(name, durable, exclusive, autoDelete, args, b.storeFactory())
 	b.queues[name] = q
+	b.bindQueueLocked("", name, name, nil)
 	return q, nil
 }
 
@@ -143,7 +148,10 @@ func (b *Broker) DeleteQueue(name string) error {
 func (b *Broker) BindQueue(exchangeName, queueName, routingKey string, args map[string]any) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.bindQueueLocked(exchangeName, queueName, routingKey, args)
+}
 
+func (b *Broker) bindQueueLocked(exchangeName, queueName, routingKey string, args map[string]any) error {
 	if _, ok := b.exchanges[exchangeName]; !ok {
 		return fmt.Errorf("exchange %q not found", exchangeName)
 	}

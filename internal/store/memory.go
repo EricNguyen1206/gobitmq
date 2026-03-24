@@ -12,8 +12,8 @@ import (
 type MemoryMessageStore struct {
 	mu      sync.Mutex
 	nextTag uint64
-	ready   []Message            // FIFO queue of messages ready for delivery
-	unacked map[uint64]Message   // messages awaiting Ack/Nack
+	ready   []Message          // FIFO queue of messages ready for delivery
+	unacked map[uint64]Message // messages awaiting Ack/Nack
 }
 
 // NewMemoryMessageStore creates an empty in-memory store.
@@ -30,6 +30,7 @@ func (s *MemoryMessageStore) Enqueue(msg Message) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	msg = cloneMessage(msg)
 	msg.DeliveryTag = s.nextTag
 	s.nextTag++
 	s.ready = append(s.ready, msg)
@@ -49,7 +50,7 @@ func (s *MemoryMessageStore) Dequeue() (Message, bool, error) {
 	msg := s.ready[0]
 	s.ready = s.ready[1:]
 	s.unacked[msg.DeliveryTag] = msg
-	return msg, true, nil
+	return cloneMessage(msg), true, nil
 }
 
 // Ack removes an unacked message permanently.
@@ -91,4 +92,49 @@ func (s *MemoryMessageStore) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.ready)
+}
+
+func cloneMessage(msg Message) Message {
+	clone := msg
+	if msg.Body != nil {
+		clone.Body = append([]byte(nil), msg.Body...)
+	}
+	if msg.Headers != nil {
+		clone.Headers = cloneHeaders(msg.Headers)
+	}
+	return clone
+}
+
+func cloneHeaders(headers map[string]any) map[string]any {
+	clone := make(map[string]any, len(headers))
+	for key, value := range headers {
+		switch v := value.(type) {
+		case []byte:
+			clone[key] = append([]byte(nil), v...)
+		case map[string]any:
+			clone[key] = cloneHeaders(v)
+		case []any:
+			clone[key] = cloneAnySlice(v)
+		default:
+			clone[key] = v
+		}
+	}
+	return clone
+}
+
+func cloneAnySlice(values []any) []any {
+	clone := make([]any, 0, len(values))
+	for _, value := range values {
+		switch v := value.(type) {
+		case []byte:
+			clone = append(clone, append([]byte(nil), v...))
+		case map[string]any:
+			clone = append(clone, cloneHeaders(v))
+		case []any:
+			clone = append(clone, cloneAnySlice(v))
+		default:
+			clone = append(clone, v)
+		}
+	}
+	return clone
 }
