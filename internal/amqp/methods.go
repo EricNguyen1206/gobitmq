@@ -12,6 +12,7 @@ const (
 	classExchange   uint16 = 40
 	classQueue      uint16 = 50
 	classBasic      uint16 = 60
+	classConfirm    uint16 = 85
 )
 
 type Method interface {
@@ -173,6 +174,23 @@ type BasicAck struct {
 	Multiple    bool
 }
 
+type BasicReject struct {
+	DeliveryTag uint64
+	Requeue     bool
+}
+
+type BasicNack struct {
+	DeliveryTag uint64
+	Multiple    bool
+	Requeue     bool
+}
+
+type ConfirmSelect struct {
+	NoWait bool
+}
+
+type ConfirmSelectOk struct{}
+
 func EncodeMethodFrame(channel uint16, method Method) (Frame, error) {
 	var payload bytes.Buffer
 	binary.Write(&payload, binary.BigEndian, method.ClassID())  //nolint:errcheck
@@ -267,6 +285,17 @@ func DecodeMethodFrame(frame Frame) (Method, error) {
 			return decodeBasicDeliver(r)
 		case 80:
 			return decodeBasicAck(r)
+		case 90:
+			return decodeBasicReject(r)
+		case 120:
+			return decodeBasicNack(r)
+		}
+	case classConfirm:
+		switch methodID {
+		case 10:
+			return decodeConfirmSelect(r)
+		case 11:
+			return ConfirmSelectOk{}, nil
 		}
 	}
 
@@ -920,6 +949,63 @@ func decodeBasicAck(r *bytes.Reader) (Method, error) {
 		err = bitErr
 	}
 	return m, err
+}
+
+func (m BasicReject) ClassID() uint16  { return classBasic }
+func (m BasicReject) MethodID() uint16 { return 90 }
+func (m BasicReject) marshal(w *bytes.Buffer) error {
+	binary.Write(w, binary.BigEndian, m.DeliveryTag) //nolint:errcheck
+	return writeBit(w, m.Requeue)
+}
+
+func decodeBasicReject(r *bytes.Reader) (Method, error) {
+	var m BasicReject
+	err := binary.Read(r, binary.BigEndian, &m.DeliveryTag)
+	if err == nil {
+		bits, bitErr := readBits(r)
+		m.Requeue = bit(bits, 0)
+		err = bitErr
+	}
+	return m, err
+}
+
+func (m BasicNack) ClassID() uint16  { return classBasic }
+func (m BasicNack) MethodID() uint16 { return 120 }
+func (m BasicNack) marshal(w *bytes.Buffer) error {
+	binary.Write(w, binary.BigEndian, m.DeliveryTag) //nolint:errcheck
+	return writeBits(w, m.Multiple, m.Requeue)
+}
+
+func decodeBasicNack(r *bytes.Reader) (Method, error) {
+	var m BasicNack
+	err := binary.Read(r, binary.BigEndian, &m.DeliveryTag)
+	if err == nil {
+		bits, bitErr := readBits(r)
+		m.Multiple = bit(bits, 0)
+		m.Requeue = bit(bits, 1)
+		err = bitErr
+	}
+	return m, err
+}
+
+func (m ConfirmSelect) ClassID() uint16  { return classConfirm }
+func (m ConfirmSelect) MethodID() uint16 { return 10 }
+func (m ConfirmSelect) marshal(w *bytes.Buffer) error {
+	return writeBit(w, m.NoWait)
+}
+
+func decodeConfirmSelect(r *bytes.Reader) (Method, error) {
+	bits, err := readBits(r)
+	if err != nil {
+		return nil, err
+	}
+	return ConfirmSelect{NoWait: bit(bits, 0)}, nil
+}
+
+func (m ConfirmSelectOk) ClassID() uint16  { return classConfirm }
+func (m ConfirmSelectOk) MethodID() uint16 { return 11 }
+func (m ConfirmSelectOk) marshal(w *bytes.Buffer) error {
+	return nil
 }
 
 func writeBit(w *bytes.Buffer, value bool) error {

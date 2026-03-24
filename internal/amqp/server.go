@@ -20,8 +20,9 @@ type Server struct {
 	Addr   string
 	broker *amqpcore.Broker
 
-	nextConnID  atomic.Uint64
-	nextQueueID atomic.Uint64
+	nextConnID     atomic.Uint64
+	nextQueueID    atomic.Uint64
+	nextConsumerID atomic.Uint64
 
 	mu          sync.Mutex
 	connections map[uint64]*serverConn
@@ -48,19 +49,24 @@ type channelState struct {
 
 	mu              sync.Mutex
 	nextDeliveryTag uint64
+	nextPublishSeq  uint64
+	confirmMode     bool
 	inFlight        map[uint64]deliveryRef
 	consumers       map[string]*consumerState
 }
 
 type deliveryRef struct {
-	queueName string
-	storeTag  uint64
+	queueName   string
+	storeTag    uint64
+	consumerTag string
+	msg         amqpcore.Message
 }
 
 type consumerState struct {
 	tag       string
 	queueName string
 	autoAck   bool
+	unacked   int
 	stop      chan struct{}
 	stopped   atomic.Bool
 }
@@ -203,11 +209,11 @@ func (c *serverConn) startMethod() ConnectionStart {
 			"information": "EriOnn-MQ AMQP 0-9-1 MVP",
 			"capabilities": Table{
 				"authentication_failure_close": false,
-				"basic.nack":                   false,
+				"basic.nack":                   true,
 				"connection.blocked":           false,
 				"consumer_cancel_notify":       false,
 				"exchange_exchange_bindings":   false,
-				"publisher_confirms":           false,
+				"publisher_confirms":           true,
 			},
 		},
 		Mechanisms: "PLAIN",
@@ -248,6 +254,12 @@ func (c *serverConn) handleMethod(channel uint16, method Method) error {
 		return c.handleBasicCancel(channel, m)
 	case BasicAck:
 		return c.handleBasicAck(channel, m)
+	case BasicNack:
+		return c.handleBasicNack(channel, m)
+	case BasicReject:
+		return c.handleBasicReject(channel, m)
+	case ConfirmSelect:
+		return c.handleConfirmSelect(channel, m)
 	default:
 		return fmt.Errorf("amqp: unsupported runtime method %T", method)
 	}
@@ -295,6 +307,7 @@ func (c *serverConn) handleChannelOpen(id uint16) error {
 				Consumers:  make(map[string]*amqpcore.ConsumerSubscription),
 			},
 			nextDeliveryTag: 1,
+			nextPublishSeq:  1,
 			inFlight:        make(map[uint64]deliveryRef),
 			consumers:       make(map[string]*consumerState),
 		}
@@ -355,9 +368,6 @@ func (c *serverConn) handleQueueDeclare(channel uint16, m QueueDeclare) error {
 		q, err = c.broker.GetQueue(queueName)
 	} else {
 		q, err = c.broker.DeclareQueue(queueName, m.Durable, m.Exclusive, m.AutoDelete, map[string]any(m.Arguments))
-		if err == nil {
-			err = c.broker.BindQueue("", queueName, queueName, nil)
-		}
 	}
 	if err != nil {
 		return err
@@ -421,7 +431,54 @@ func (c *serverConn) handleBasicPublish(channel uint16, m BasicPublish) error {
 		msg.Headers = map[string]any(header.Properties.Headers)
 	}
 
-	return c.broker.Publish(m.Exchange, m.RoutingKey, msg)
+	confirmSeq := c.nextConfirmSeq(channel)
+	if err := c.broker.Publish(m.Exchange, m.RoutingKey, msg); err != nil {
+		if confirmSeq > 0 {
+			_ = c.sendMethod(channel, BasicNack{DeliveryTag: confirmSeq, Requeue: false})
+		}
+		return err
+	}
+	if confirmSeq > 0 {
+		if err := c.sendMethod(channel, BasicAck{DeliveryTag: confirmSeq}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *serverConn) handleConfirmSelect(channel uint16, m ConfirmSelect) error {
+	ch, err := c.requireChannel(channel)
+	if err != nil {
+		return err
+	}
+
+	ch.mu.Lock()
+	ch.confirmMode = true
+	if ch.nextPublishSeq == 0 {
+		ch.nextPublishSeq = 1
+	}
+	ch.mu.Unlock()
+
+	if m.NoWait {
+		return nil
+	}
+	return c.sendMethod(channel, ConfirmSelectOk{})
+}
+
+func (c *serverConn) nextConfirmSeq(channel uint16) uint64 {
+	ch, err := c.requireChannel(channel)
+	if err != nil {
+		return 0
+	}
+
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	if !ch.confirmMode {
+		return 0
+	}
+	seq := ch.nextPublishSeq
+	ch.nextPublishSeq++
+	return seq
 }
 
 func (c *serverConn) handleBasicQos(channel uint16, m BasicQos) error {
@@ -431,7 +488,11 @@ func (c *serverConn) handleBasicQos(channel uint16, m BasicQos) error {
 	}
 
 	ch.mu.Lock()
-	ch.channel.PrefetchCount = int(m.PrefetchCount)
+	if m.Global {
+		ch.channel.PrefetchCount = int(m.PrefetchCount)
+	} else {
+		ch.channel.ConsumerPrefetchCount = int(m.PrefetchCount)
+	}
 	ch.mu.Unlock()
 
 	return c.sendMethod(channel, BasicQosOk{})
@@ -448,7 +509,7 @@ func (c *serverConn) handleBasicConsume(channel uint16, m BasicConsume) error {
 
 	tag := m.ConsumerTag
 	if tag == "" {
-		tag = fmt.Sprintf("ctag-%d-%d", channel, time.Now().UnixNano())
+		tag = fmt.Sprintf("ctag-%d-%d", channel, c.server.nextConsumerID.Add(1))
 	}
 
 	consumer := &consumerState{
@@ -506,8 +567,50 @@ func (c *serverConn) handleBasicAck(channel uint16, m BasicAck) error {
 		if err := q.Ack(ref.storeTag); err != nil {
 			return err
 		}
+		c.broker.RecordAck()
 	}
 	return nil
+}
+
+func (c *serverConn) handleBasicNack(channel uint16, m BasicNack) error {
+	return c.handleNegativeAck(channel, m.DeliveryTag, m.Multiple, m.Requeue, "nack", c.broker.RecordNack)
+}
+
+func (c *serverConn) handleBasicReject(channel uint16, m BasicReject) error {
+	return c.handleNegativeAck(channel, m.DeliveryTag, false, m.Requeue, "reject", c.broker.RecordReject)
+}
+
+func (c *serverConn) handleNegativeAck(channel uint16, deliveryTag uint64, multiple, requeue bool, reason string, record func()) error {
+	ch, err := c.requireChannel(channel)
+	if err != nil {
+		return err
+	}
+
+	refs, err := ch.nackRefs(deliveryTag, multiple)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, ref := range refs {
+		q, err := c.broker.GetQueue(ref.queueName)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := q.Nack(ref.storeTag, requeue); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		record()
+		if !requeue {
+			if err := c.broker.DeadLetter(ref.queueName, ref.msg, reason); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func (c *serverConn) readPublishedContent(channel uint16) (ContentHeader, []byte, error) {
@@ -660,7 +763,7 @@ func (c *serverConn) consumeLoop(channelID uint16, ch *channelState, consumer *c
 		default:
 		}
 
-		if !ch.canDispatch() {
+		if !ch.canDispatch(consumer.tag) {
 			select {
 			case <-c.done:
 				return
@@ -708,7 +811,7 @@ func (c *serverConn) consumeLoop(channelID uint16, ch *channelState, consumer *c
 		default:
 		}
 
-		deliveryTag, reserved := ch.reserveDelivery(consumer.queueName, msg.DeliveryTag, consumer.autoAck)
+		deliveryTag, reserved := ch.reserveDelivery(consumer.tag, consumer.queueName, msg.DeliveryTag, msg, consumer.autoAck)
 
 		select {
 		case <-c.done:
@@ -734,8 +837,14 @@ func (c *serverConn) consumeLoop(channelID uint16, ch *channelState, consumer *c
 			return
 		}
 
+		c.broker.RecordDeliver()
+		if msg.Redelivered {
+			c.broker.RecordRedeliver()
+		}
+
 		if consumer.autoAck {
 			_ = queue.Ack(msg.DeliveryTag)
+			c.broker.RecordAck()
 		}
 	}
 }
@@ -821,24 +930,34 @@ func (ch *channelState) stopAllConsumers() {
 	}
 }
 
-func (ch *channelState) canDispatch() bool {
+func (ch *channelState) canDispatch(consumerTag string) bool {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if ch.channel.PrefetchCount <= 0 {
+	if ch.channel.PrefetchCount > 0 && len(ch.inFlight) >= ch.channel.PrefetchCount {
+		return false
+	}
+	if ch.channel.ConsumerPrefetchCount <= 0 {
 		return true
 	}
-	return len(ch.inFlight) < ch.channel.PrefetchCount
+	consumer, ok := ch.consumers[consumerTag]
+	if !ok {
+		return true
+	}
+	return consumer.unacked < ch.channel.ConsumerPrefetchCount
 }
 
-func (ch *channelState) reserveDelivery(queueName string, storeTag uint64, autoAck bool) (uint64, bool) {
+func (ch *channelState) reserveDelivery(consumerTag, queueName string, storeTag uint64, msg amqpcore.Message, autoAck bool) (uint64, bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
 	tag := ch.nextDeliveryTag
 	ch.nextDeliveryTag++
 	if !autoAck {
-		ch.inFlight[tag] = deliveryRef{queueName: queueName, storeTag: storeTag}
+		if consumer, ok := ch.consumers[consumerTag]; ok {
+			consumer.unacked++
+		}
+		ch.inFlight[tag] = deliveryRef{queueName: queueName, storeTag: storeTag, consumerTag: consumerTag, msg: msg}
 	}
 	return tag, !autoAck
 }
@@ -846,10 +965,25 @@ func (ch *channelState) reserveDelivery(queueName string, storeTag uint64, autoA
 func (ch *channelState) releaseDelivery(deliveryTag uint64) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
+	ref, ok := ch.inFlight[deliveryTag]
+	if !ok {
+		return
+	}
 	delete(ch.inFlight, deliveryTag)
+	if consumer, ok := ch.consumers[ref.consumerTag]; ok && consumer.unacked > 0 {
+		consumer.unacked--
+	}
 }
 
 func (ch *channelState) ackRefs(deliveryTag uint64, multiple bool) ([]deliveryRef, error) {
+	return ch.takeRefs(deliveryTag, multiple)
+}
+
+func (ch *channelState) nackRefs(deliveryTag uint64, multiple bool) ([]deliveryRef, error) {
+	return ch.takeRefs(deliveryTag, multiple)
+}
+
+func (ch *channelState) takeRefs(deliveryTag uint64, multiple bool) ([]deliveryRef, error) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -858,6 +992,9 @@ func (ch *channelState) ackRefs(deliveryTag uint64, multiple bool) ([]deliveryRe
 		for tag, ref := range ch.inFlight {
 			if deliveryTag == 0 || tag <= deliveryTag {
 				refs = append(refs, ref)
+				if consumer, ok := ch.consumers[ref.consumerTag]; ok && consumer.unacked > 0 {
+					consumer.unacked--
+				}
 				delete(ch.inFlight, tag)
 			}
 		}
@@ -875,6 +1012,9 @@ func (ch *channelState) ackRefs(deliveryTag uint64, multiple bool) ([]deliveryRe
 		return nil, fmt.Errorf("amqp: unknown delivery tag %d", deliveryTag)
 	}
 	delete(ch.inFlight, deliveryTag)
+	if consumer, ok := ch.consumers[ref.consumerTag]; ok && consumer.unacked > 0 {
+		consumer.unacked--
+	}
 	return []deliveryRef{ref}, nil
 }
 

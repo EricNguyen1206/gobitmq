@@ -22,7 +22,7 @@ func newQueue(name string, durable, exclusive, autoDelete bool, args map[string]
 		Durable:    durable,
 		Exclusive:  exclusive,
 		AutoDelete: autoDelete,
-		Args:       args,
+		Args:       cloneArgs(args),
 		store:      s,
 	}
 }

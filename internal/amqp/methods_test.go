@@ -59,6 +59,18 @@ func TestMethodFrames_RoundTrip(t *testing.T) {
 			name:   "basic-ack",
 			method: BasicAck{DeliveryTag: 99, Multiple: true},
 		},
+		{
+			name:   "basic-reject",
+			method: BasicReject{DeliveryTag: 42, Requeue: true},
+		},
+		{
+			name:   "basic-nack",
+			method: BasicNack{DeliveryTag: 77, Multiple: true, Requeue: true},
+		},
+		{
+			name:   "confirm-select",
+			method: ConfirmSelect{NoWait: true},
+		},
 	}
 
 	for _, tc := range tests {

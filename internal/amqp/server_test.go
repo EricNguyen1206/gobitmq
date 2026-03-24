@@ -39,6 +39,92 @@ func TestServer_EndToEndPublishConsumeAck(t *testing.T) {
 	client.closeChannelAndConnection(t, 1)
 }
 
+func TestServer_PublisherConfirms_AckOnPublish(t *testing.T) {
+	client := newTestClient(t)
+	client.sendMethod(t, 1, ConfirmSelect{})
+	if _, ok := client.readMethod(t).(ConfirmSelectOk); !ok {
+		t.Fatal("expected ConfirmSelectOk")
+	}
+
+	client.publish(t, 1, "test-ex", "test-key", BasicProperties{}, []byte("hello"))
+	ack, ok := client.readMethod(t).(BasicAck)
+	if !ok {
+		t.Fatal("expected BasicAck for publish confirm")
+	}
+	if ack.DeliveryTag != 1 {
+		t.Fatalf("unexpected confirm delivery tag: got=%d want=1", ack.DeliveryTag)
+	}
+
+	client.closeChannelAndConnection(t, 1)
+}
+
+func TestServer_BasicNack_Requeue_Redelivers(t *testing.T) {
+	client := newTestClient(t)
+	consumerTag := client.consume(t, 1, "test-q")
+
+	client.publish(t, 1, "test-ex", "test-key", BasicProperties{}, []byte("hello"))
+
+	first, _, body := client.readDelivery(t, 1)
+	if string(body) != "hello" {
+		t.Fatalf("unexpected body: %q", string(body))
+	}
+	client.sendMethod(t, 1, BasicNack{DeliveryTag: first.DeliveryTag, Requeue: true})
+
+	redelivery, _, redeliveredBody := client.readDelivery(t, 1)
+	if redelivery.ConsumerTag != consumerTag {
+		t.Fatalf("unexpected consumer tag: got=%q want=%q", redelivery.ConsumerTag, consumerTag)
+	}
+	if string(redeliveredBody) != "hello" {
+		t.Fatalf("unexpected redelivered body: %q", string(redeliveredBody))
+	}
+	if !redelivery.Redelivered {
+		t.Fatal("expected redelivery flag to be set")
+	}
+
+	client.sendMethod(t, 1, BasicAck{DeliveryTag: redelivery.DeliveryTag})
+	client.cancelConsumer(t, 1, consumerTag)
+	client.closeChannelAndConnection(t, 1)
+}
+
+func TestServer_BasicReject_DeadLetters(t *testing.T) {
+	client := newTestClient(t)
+	client.declareExchange(t, 1, "dlx", "direct")
+	client.declareQueue(t, 1, "source-q", Table{
+		"x-dead-letter-exchange":    "dlx",
+		"x-dead-letter-routing-key": "dead",
+	})
+	client.bindQueue(t, 1, "source-q", "test-ex", "source")
+	client.declareQueue(t, 1, "dead-q", nil)
+	client.bindQueue(t, 1, "dead-q", "dlx", "dead")
+
+	sourceTag := client.consume(t, 1, "source-q")
+	deadTag := client.consume(t, 1, "dead-q")
+
+	client.publish(t, 1, "test-ex", "source", BasicProperties{}, []byte("hello"))
+
+	rejected, _, body := client.readDelivery(t, 1)
+	if rejected.ConsumerTag != sourceTag {
+		t.Fatalf("unexpected source consumer tag: got=%q want=%q", rejected.ConsumerTag, sourceTag)
+	}
+	if string(body) != "hello" {
+		t.Fatalf("unexpected rejected body: %q", string(body))
+	}
+	client.sendMethod(t, 1, BasicReject{DeliveryTag: rejected.DeliveryTag, Requeue: false})
+
+	deadLetter, _, deadBody := client.readDelivery(t, 1)
+	if deadLetter.ConsumerTag != deadTag {
+		t.Fatalf("unexpected dead-letter consumer tag: got=%q want=%q", deadLetter.ConsumerTag, deadTag)
+	}
+	if string(deadBody) != "hello" {
+		t.Fatalf("unexpected dead-letter body: %q", string(deadBody))
+	}
+
+	client.sendMethod(t, 1, BasicAck{DeliveryTag: deadLetter.DeliveryTag})
+	client.cancelConsumer(t, 1, sourceTag)
+	client.cancelConsumer(t, 1, deadTag)
+	client.closeChannelAndConnection(t, 1)
+}
+
 func TestServer_BasicQos_BlocksUntilAck(t *testing.T) {
 	client := newTestClient(t)
 	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1})
@@ -77,6 +163,85 @@ func TestServer_BasicQos_BlocksUntilAck(t *testing.T) {
 		t.Fatal("expected BasicCancelOk")
 	}
 
+	client.closeChannelAndConnection(t, 1)
+}
+
+func TestServer_BasicQos_GlobalFalseAppliesPerConsumer(t *testing.T) {
+	client := newTestClient(t)
+	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1, Global: false})
+	if _, ok := client.readMethod(t).(BasicQosOk); !ok {
+		t.Fatal("expected BasicQosOk")
+	}
+
+	client.declareQueue(t, 1, "alt-q", nil)
+	client.bindQueue(t, 1, "alt-q", "test-ex", "alt-key")
+
+	firstTag := client.consume(t, 1, "test-q")
+	secondTag := client.consume(t, 1, "alt-q")
+
+	client.publish(t, 1, "test-ex", "test-key", BasicProperties{}, []byte("first"))
+	client.publish(t, 1, "test-ex", "alt-key", BasicProperties{}, []byte("second"))
+
+	seen := make(map[string]string, 2)
+	deliveryTags := make([]uint64, 0, 2)
+	for range 2 {
+		deliver, _, body := client.readDelivery(t, 1)
+		seen[deliver.ConsumerTag] = string(body)
+		deliveryTags = append(deliveryTags, deliver.DeliveryTag)
+	}
+
+	if seen[firstTag] != "first" {
+		t.Fatalf("unexpected delivery for first consumer: %v", seen)
+	}
+	if seen[secondTag] != "second" {
+		t.Fatalf("unexpected delivery for second consumer: %v", seen)
+	}
+
+	for _, deliveryTag := range deliveryTags {
+		client.sendMethod(t, 1, BasicAck{DeliveryTag: deliveryTag})
+	}
+
+	client.cancelConsumer(t, 1, firstTag)
+	client.cancelConsumer(t, 1, secondTag)
+	client.closeChannelAndConnection(t, 1)
+}
+
+func TestServer_BasicQos_GlobalTrueLimitsWholeChannel(t *testing.T) {
+	client := newTestClient(t)
+	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1, Global: true})
+	if _, ok := client.readMethod(t).(BasicQosOk); !ok {
+		t.Fatal("expected BasicQosOk")
+	}
+
+	client.declareQueue(t, 1, "alt-q", nil)
+	client.bindQueue(t, 1, "alt-q", "test-ex", "alt-key")
+
+	firstTag := client.consume(t, 1, "test-q")
+	secondTag := client.consume(t, 1, "alt-q")
+
+	client.publish(t, 1, "test-ex", "test-key", BasicProperties{}, []byte("first"))
+	client.publish(t, 1, "test-ex", "alt-key", BasicProperties{}, []byte("second"))
+
+	first, _, firstBody := client.readDelivery(t, 1)
+	client.expectNoFrame(t, 1*time.Second)
+
+	client.sendMethod(t, 1, BasicAck{DeliveryTag: first.DeliveryTag})
+	second, _, secondBody := client.readDelivery(t, 1)
+
+	seen := map[string]string{
+		first.ConsumerTag:  string(firstBody),
+		second.ConsumerTag: string(secondBody),
+	}
+	if seen[firstTag] != "first" {
+		t.Fatalf("unexpected first consumer deliveries: %v", seen)
+	}
+	if seen[secondTag] != "second" {
+		t.Fatalf("unexpected second consumer deliveries: %v", seen)
+	}
+
+	client.sendMethod(t, 1, BasicAck{DeliveryTag: second.DeliveryTag})
+	client.cancelConsumer(t, 1, firstTag)
+	client.cancelConsumer(t, 1, secondTag)
 	client.closeChannelAndConnection(t, 1)
 }
 
@@ -345,20 +510,9 @@ func (c *testClient) openChannel(t *testing.T, channel uint16) {
 func (c *testClient) declareTopology(t *testing.T) {
 	t.Helper()
 
-	c.sendMethod(t, 1, ExchangeDeclare{Exchange: "test-ex", Type: "direct"})
-	if _, ok := c.readMethod(t).(ExchangeDeclareOk); !ok {
-		t.Fatal("expected ExchangeDeclareOk")
-	}
-
-	c.sendMethod(t, 1, QueueDeclare{Queue: "test-q"})
-	if _, ok := c.readMethod(t).(QueueDeclareOk); !ok {
-		t.Fatal("expected QueueDeclareOk")
-	}
-
-	c.sendMethod(t, 1, QueueBind{Queue: "test-q", Exchange: "test-ex", RoutingKey: "test-key"})
-	if _, ok := c.readMethod(t).(QueueBindOk); !ok {
-		t.Fatal("expected QueueBindOk")
-	}
+	c.declareExchange(t, 1, "test-ex", "direct")
+	c.declareQueue(t, 1, "test-q", nil)
+	c.bindQueue(t, 1, "test-q", "test-ex", "test-key")
 }
 
 func (c *testClient) consume(t *testing.T, channel uint16, queue string) string {
@@ -372,6 +526,38 @@ func (c *testClient) consume(t *testing.T, channel uint16, queue string) string 
 		t.Fatal("expected generated consumer tag")
 	}
 	return consumeOk.ConsumerTag
+}
+
+func (c *testClient) declareExchange(t *testing.T, channel uint16, exchange, kind string) {
+	t.Helper()
+	c.sendMethod(t, channel, ExchangeDeclare{Exchange: exchange, Type: kind})
+	if _, ok := c.readMethod(t).(ExchangeDeclareOk); !ok {
+		t.Fatal("expected ExchangeDeclareOk")
+	}
+}
+
+func (c *testClient) declareQueue(t *testing.T, channel uint16, queue string, args Table) {
+	t.Helper()
+	c.sendMethod(t, channel, QueueDeclare{Queue: queue, Arguments: args})
+	if _, ok := c.readMethod(t).(QueueDeclareOk); !ok {
+		t.Fatal("expected QueueDeclareOk")
+	}
+}
+
+func (c *testClient) bindQueue(t *testing.T, channel uint16, queue, exchange, routingKey string) {
+	t.Helper()
+	c.sendMethod(t, channel, QueueBind{Queue: queue, Exchange: exchange, RoutingKey: routingKey})
+	if _, ok := c.readMethod(t).(QueueBindOk); !ok {
+		t.Fatal("expected QueueBindOk")
+	}
+}
+
+func (c *testClient) cancelConsumer(t *testing.T, channel uint16, consumerTag string) {
+	t.Helper()
+	c.sendMethod(t, channel, BasicCancel{ConsumerTag: consumerTag})
+	if _, ok := c.readMethod(t).(BasicCancelOk); !ok {
+		t.Fatal("expected BasicCancelOk")
+	}
 }
 
 func (c *testClient) publish(t *testing.T, channel uint16, exchange, routingKey string, props BasicProperties, body []byte) {
@@ -427,6 +613,19 @@ func (c *testClient) readDelivery(t *testing.T, channel uint16) (BasicDeliver, C
 	}
 
 	return method, header, body
+}
+
+func (c *testClient) expectNoFrame(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	c.conn.SetReadDeadline(time.Now().Add(timeout))
+	_, err := ReadFrame(c.conn, defaultFrameMax)
+	if err == nil {
+		t.Fatal("expected no frame before timeout")
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("expected timeout, got %v", err)
+	}
+	c.conn.SetReadDeadline(time.Time{})
 }
 
 func (c *testClient) closeChannelAndConnection(t *testing.T, channel uint16) {

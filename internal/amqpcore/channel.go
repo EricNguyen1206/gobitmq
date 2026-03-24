@@ -4,10 +4,11 @@ package amqpcore
 // Phase 2 will add the full protocol state machine; for now it holds
 // the fields that amqpcore routing / subscription logic needs.
 type Channel struct {
-	ID           uint16
-	Connection   *Connection
-	PrefetchCount int    // QoS — max unacked messages (0 = unlimited)
-	Consumers    map[string]*ConsumerSubscription // consumer tag → subscription
+	ID                    uint16
+	Connection            *Connection
+	PrefetchCount         int                              // QoS — max unacked messages per channel when global=true
+	ConsumerPrefetchCount int                              // QoS — max unacked messages per consumer when global=false
+	Consumers             map[string]*ConsumerSubscription // consumer tag → subscription
 }
 
 // newChannel creates a Channel attached to the given connection.
@@ -21,8 +22,8 @@ func newChannel(id uint16, conn *Connection) *Channel {
 
 // ConsumerSubscription represents a consumer registered via Basic.Consume.
 type ConsumerSubscription struct {
-	Tag     string   // unique consumer tag within the channel
-	Queue   string   // queue name being consumed
+	Tag     string // unique consumer tag within the channel
+	Queue   string // queue name being consumed
 	Channel *Channel
 	AutoAck bool
 	// Deliver is called by the broker for each message dispatched to this consumer.

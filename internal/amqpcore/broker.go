@@ -19,16 +19,48 @@ type Broker struct {
 	exchanges map[string]*Exchange
 	queues    map[string]*Queue
 	bindings  []*Binding
+	metrics   brokerMetrics
 
 	// storeFactory creates a fresh MessageStore for each newly declared queue.
-	storeFactory func() store.MessageStore
+	storeFactory QueueStoreFactory
+	metadataPath string
 }
+
+// QueueConfig describes a queue declaration when choosing a backing store.
+type QueueConfig struct {
+	Name       string
+	Durable    bool
+	Exclusive  bool
+	AutoDelete bool
+	Args       map[string]any
+}
+
+// QueueStoreFactory creates the MessageStore for a declared queue.
+type QueueStoreFactory func(QueueConfig) (store.MessageStore, error)
 
 // NewBroker creates a Broker pre-populated with the default AMQP exchanges.
 //
 // storeFactory is called once per DeclareQueue call; pass
 // store.NewMemoryMessageStore for the in-memory implementation.
 func NewBroker(storeFactory func() store.MessageStore) *Broker {
+	if storeFactory == nil {
+		storeFactory = func() store.MessageStore {
+			return store.NewMemoryMessageStore()
+		}
+	}
+	return NewBrokerWithQueueStoreFactory(func(QueueConfig) (store.MessageStore, error) {
+		return storeFactory(), nil
+	})
+}
+
+// NewBrokerWithQueueStoreFactory creates a Broker with a queue-aware store factory.
+func NewBrokerWithQueueStoreFactory(storeFactory QueueStoreFactory) *Broker {
+	if storeFactory == nil {
+		storeFactory = func(QueueConfig) (store.MessageStore, error) {
+			return store.NewMemoryMessageStore(), nil
+		}
+	}
+
 	b := &Broker{
 		exchanges:    make(map[string]*Exchange),
 		queues:       make(map[string]*Queue),
@@ -73,6 +105,9 @@ func (b *Broker) DeclareExchange(name string, kind ExchangeType, durable, autoDe
 
 	ex := newExchange(name, kind, durable, autoDelete, internal)
 	b.exchanges[name] = ex
+	if err := b.persistMetadataLocked(); err != nil {
+		return nil, err
+	}
 	return ex, nil
 }
 
@@ -95,6 +130,8 @@ func (b *Broker) DeclareQueue(name string, durable, exclusive, autoDelete bool, 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	args = cloneArgs(args)
+
 	if q, ok := b.queues[name]; ok {
 		if q.Durable != durable || q.Exclusive != exclusive || q.AutoDelete != autoDelete || !sameArgs(q.Args, args) {
 			return nil, fmt.Errorf("queue %q already declared with different attributes", name)
@@ -102,9 +139,25 @@ func (b *Broker) DeclareQueue(name string, durable, exclusive, autoDelete bool, 
 		return q, nil
 	}
 
-	q := newQueue(name, durable, exclusive, autoDelete, args, b.storeFactory())
+	store, err := b.storeFactory(QueueConfig{
+		Name:       name,
+		Durable:    durable,
+		Exclusive:  exclusive,
+		AutoDelete: autoDelete,
+		Args:       cloneArgs(args),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	q := newQueue(name, durable, exclusive, autoDelete, args, store)
 	b.queues[name] = q
-	b.bindQueueLocked("", name, name, nil)
+	if err := b.bindQueueLocked("", name, name, nil); err != nil {
+		return nil, err
+	}
+	if err := b.persistMetadataLocked(); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
@@ -133,8 +186,14 @@ func (b *Broker) DeleteQueue(name string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if _, ok := b.queues[name]; !ok {
+	q, ok := b.queues[name]
+	if !ok {
 		return fmt.Errorf("queue %q not found", name)
+	}
+	if destroyer, ok := q.store.(interface{ Destroy() error }); ok {
+		if err := destroyer.Destroy(); err != nil {
+			return err
+		}
 	}
 	delete(b.queues, name)
 
@@ -146,7 +205,26 @@ func (b *Broker) DeleteQueue(name string) error {
 		}
 	}
 	b.bindings = remaining
+	if err := b.persistMetadataLocked(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// Close releases resources held by queue stores.
+func (b *Broker) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var errs []error
+	for _, q := range b.queues {
+		if closer, ok := q.store.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // --- Binding ---
@@ -156,7 +234,10 @@ func (b *Broker) DeleteQueue(name string) error {
 func (b *Broker) BindQueue(exchangeName, queueName, routingKey string, args map[string]any) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.bindQueueLocked(exchangeName, queueName, routingKey, args)
+	if err := b.bindQueueLocked(exchangeName, queueName, routingKey, cloneArgs(args)); err != nil {
+		return err
+	}
+	return b.persistMetadataLocked()
 }
 
 func (b *Broker) bindQueueLocked(exchangeName, queueName, routingKey string, args map[string]any) error {
@@ -180,7 +261,7 @@ func (b *Broker) bindQueueLocked(exchangeName, queueName, routingKey string, arg
 		ExchangeName: exchangeName,
 		QueueName:    queueName,
 		RoutingKey:   routingKey,
-		Args:         args,
+		Args:         cloneArgs(args),
 	})
 	return nil
 }
@@ -198,6 +279,7 @@ func (b *Broker) Publish(exchangeName, routingKey string, msg Message) error {
 		b.mu.RUnlock()
 		return fmt.Errorf("exchange %q not found", exchangeName)
 	}
+	b.RecordPublish()
 
 	// Collect matching bindings under the read lock.
 	var targets []string
@@ -250,4 +332,46 @@ func (b *Broker) Route(exchangeName, routingKey string) ([]string, error) {
 		}
 	}
 	return queues, nil
+}
+
+// DeadLetter republishes a rejected message using the queue's DLX settings.
+// If no dead-letter exchange is configured, it is a no-op.
+func (b *Broker) DeadLetter(queueName string, msg Message, reason string) error {
+	b.mu.RLock()
+	q, ok := b.queues[queueName]
+	if !ok {
+		b.mu.RUnlock()
+		return fmt.Errorf("queue %q not found", queueName)
+	}
+	args := cloneArgs(q.Args)
+	b.mu.RUnlock()
+
+	rawExchange, ok := args["x-dead-letter-exchange"]
+	if !ok {
+		return nil
+	}
+	dlx, ok := rawExchange.(string)
+	if !ok {
+		return fmt.Errorf("queue %q has non-string x-dead-letter-exchange", queueName)
+	}
+
+	routingKey := msg.RoutingKey
+	if rawRoutingKey, ok := args["x-dead-letter-routing-key"]; ok {
+		dlxRoutingKey, ok := rawRoutingKey.(string)
+		if !ok {
+			return fmt.Errorf("queue %q has non-string x-dead-letter-routing-key", queueName)
+		}
+		routingKey = dlxRoutingKey
+	}
+
+	deadLetter := cloneMessage(msg)
+	deadLetter.DeliveryTag = 0
+	deadLetter.Redelivered = false
+	if deadLetter.Headers == nil {
+		deadLetter.Headers = make(map[string]any)
+	}
+	deadLetter.Headers["x-death-reason"] = reason
+	deadLetter.Headers["x-death-source-queue"] = queueName
+
+	return b.Publish(dlx, routingKey, deadLetter)
 }

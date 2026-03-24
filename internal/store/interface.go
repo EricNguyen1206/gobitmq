@@ -25,6 +25,9 @@ type MessageStore interface {
 
 	// Len returns the total number of ready messages (not including unacked ones).
 	Len() int
+
+	// Stats returns counts for ready and unacked messages.
+	Stats() QueueStats
 }
 
 // Message is the unit stored and delivered by a queue.
@@ -35,13 +38,19 @@ type Message struct {
 	RoutingKey  string
 
 	// Per-message properties (subset of AMQP Basic.Properties).
-	ContentType     string
-	CorrelationID   string
-	ReplyTo         string
-	DeliveryMode    uint8 // 1 = transient, 2 = persistent
-	Headers         map[string]any
-	Body            []byte
+	ContentType   string
+	CorrelationID string
+	ReplyTo       string
+	DeliveryMode  uint8 // 1 = transient, 2 = persistent
+	Headers       map[string]any
+	Body          []byte
 
 	// internal: set to true when this is a redelivery
 	Redelivered bool
+}
+
+// QueueStats summarizes queue depth for management/metrics.
+type QueueStats struct {
+	Ready   int
+	Unacked int
 }
