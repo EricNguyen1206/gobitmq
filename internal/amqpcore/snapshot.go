@@ -3,9 +3,10 @@ package amqpcore
 import (
 	"sort"
 	"time"
+
+	"erionn-mq/internal/store"
 )
 
-// BrokerSnapshot is a read-only view of broker state for management/metrics.
 type BrokerSnapshot struct {
 	GeneratedAt  time.Time      `json:"generated_at"`
 	MessageStats MessageStats   `json:"message_stats"`
@@ -46,7 +47,6 @@ type BindingView struct {
 	VHost           string         `json:"vhost"`
 }
 
-// Snapshot returns a point-in-time view of broker topology and queue depth.
 func (b *Broker) Snapshot() BrokerSnapshot {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -72,7 +72,7 @@ func (b *Broker) Snapshot() BrokerSnapshot {
 			Durable:       q.Durable,
 			AutoDelete:    q.AutoDelete,
 			Exclusive:     q.Exclusive,
-			Arguments:     cloneArgs(q.Args),
+			Arguments:     store.CloneTable(q.Args),
 			Messages:      stats.Ready + stats.Unacked,
 			MessagesReady: stats.Ready,
 			MessagesUnack: stats.Unacked,
@@ -86,7 +86,7 @@ func (b *Broker) Snapshot() BrokerSnapshot {
 			Destination:     bind.QueueName,
 			DestinationType: "queue",
 			RoutingKey:      bind.RoutingKey,
-			Arguments:       cloneArgs(bind.Args),
+			Arguments:       store.CloneTable(bind.Args),
 			VHost:           "/",
 		})
 	}

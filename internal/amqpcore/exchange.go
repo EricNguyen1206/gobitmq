@@ -1,27 +1,24 @@
-// Package amqpcore contains the AMQP broker domain model.
-// It is purely in-process logic — no wire protocol knowledge here.
 package amqpcore
 
-// ExchangeType enumerates the supported exchange routing algorithms.
+import "fmt"
+
 type ExchangeType string
 
 const (
 	ExchangeDirect  ExchangeType = "direct"
 	ExchangeTopic   ExchangeType = "topic"
 	ExchangeFanout  ExchangeType = "fanout"
-	ExchangeHeaders ExchangeType = "headers" // reserved, not yet routed
+	ExchangeHeaders ExchangeType = "headers"
 )
 
-// Exchange represents an AMQP exchange entity.
 type Exchange struct {
 	Name       string
 	Type       ExchangeType
 	Durable    bool
-	AutoDelete bool // delete when last binding is removed
-	Internal   bool // cannot be published to directly by clients
+	AutoDelete bool
+	Internal   bool
 }
 
-// newExchange constructs an Exchange. Use the broker's DeclareExchange instead.
 func newExchange(name string, kind ExchangeType, durable, autoDelete, internal bool) *Exchange {
 	return &Exchange{
 		Name:       name,
@@ -29,5 +26,16 @@ func newExchange(name string, kind ExchangeType, durable, autoDelete, internal b
 		Durable:    durable,
 		AutoDelete: autoDelete,
 		Internal:   internal,
+	}
+}
+
+func ParseExchangeType(value string) (ExchangeType, error) {
+	switch ExchangeType(value) {
+	case ExchangeDirect, ExchangeFanout, ExchangeTopic:
+		return ExchangeType(value), nil
+	case ExchangeHeaders:
+		return "", fmt.Errorf("exchange type %q is not supported yet", value)
+	default:
+		return "", fmt.Errorf("unsupported exchange type %q", value)
 	}
 }

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "smoke": "node amqplib-smoke.mjs"
+    "smoke": "node amqplib-smoke.mjs",
+    "compat": "node amqplib-compat.mjs"
   },
   "dependencies": {
     "amqplib": "^0.10.5"

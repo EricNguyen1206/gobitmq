@@ -331,7 +331,7 @@ func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) er
 		return err
 	}
 
-	kind, err := exchangeTypeFromString(m.Type)
+	kind, err := amqpcore.ParseExchangeType(m.Type)
 	if err != nil {
 		return err
 	}
@@ -1036,19 +1036,4 @@ func (c *consumerState) stopConsuming() {
 		return
 	}
 	close(c.stop)
-}
-
-func exchangeTypeFromString(kind string) (amqpcore.ExchangeType, error) {
-	switch kind {
-	case string(amqpcore.ExchangeDirect):
-		return amqpcore.ExchangeDirect, nil
-	case string(amqpcore.ExchangeTopic):
-		return amqpcore.ExchangeTopic, nil
-	case string(amqpcore.ExchangeFanout):
-		return amqpcore.ExchangeFanout, nil
-	case string(amqpcore.ExchangeHeaders):
-		return "", fmt.Errorf("amqp: exchange type %q is not supported yet", kind)
-	default:
-		return "", fmt.Errorf("amqp: unsupported exchange type %q", kind)
-	}
 }

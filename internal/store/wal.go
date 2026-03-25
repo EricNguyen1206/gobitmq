@@ -20,17 +20,12 @@ const (
 	walOpNack    = "nack"
 )
 
-// DurableMessageStore persists queue state to a write-ahead log.
-// It rebuilds in-memory ready/unacked state on startup by replaying the WAL.
 type DurableMessageStore struct {
 	mu      sync.Mutex
 	path    string
 	file    *os.File
 	encoder *json.Encoder
-
-	nextTag uint64
-	ready   []Message
-	unacked map[uint64]Message
+	state   queueState
 }
 
 type walRecord struct {
@@ -66,7 +61,6 @@ type persistedValue struct {
 	Array   []persistedValue          `json:"array,omitempty"`
 }
 
-// NewDurableMessageStore opens or creates a WAL-backed queue store.
 func NewDurableMessageStore(path string) (*DurableMessageStore, error) {
 	if path == "" {
 		return nil, errors.New("store: durable WAL path is required")
@@ -81,11 +75,9 @@ func NewDurableMessageStore(path string) (*DurableMessageStore, error) {
 	}
 
 	s := &DurableMessageStore{
-		path:    path,
-		file:    file,
-		nextTag: 1,
-		ready:   make([]Message, 0),
-		unacked: make(map[uint64]Message),
+		path:  path,
+		file:  file,
+		state: newQueueState(),
 	}
 
 	if err := s.replay(); err != nil {
@@ -108,58 +100,42 @@ func NewDurableMessageStore(path string) (*DurableMessageStore, error) {
 func (s *DurableMessageStore) Enqueue(msg Message) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	msg = cloneMessage(msg)
-	msg.DeliveryTag = s.nextTag
-	s.nextTag++
-	s.ready = append(s.ready, msg)
-
+	msg = s.state.enqueue(msg)
 	record, err := newEnqueueRecord(msg)
 	if err != nil {
-		s.ready = s.ready[:len(s.ready)-1]
-		s.nextTag--
+		s.state.rollbackEnqueue(msg.DeliveryTag)
 		return 0, err
 	}
 	if err := s.appendRecordLocked(record); err != nil {
-		s.ready = s.ready[:len(s.ready)-1]
-		s.nextTag--
+		s.state.rollbackEnqueue(msg.DeliveryTag)
 		return 0, err
 	}
-
 	return msg.DeliveryTag, nil
 }
 
 func (s *DurableMessageStore) Dequeue() (Message, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if len(s.ready) == 0 {
+	msg, ok := s.state.dequeue()
+	if !ok {
 		return Message{}, false, nil
 	}
-
-	msg := s.ready[0]
-	s.ready = s.ready[1:]
-	s.unacked[msg.DeliveryTag] = msg
 	if err := s.appendRecordLocked(walRecord{Op: walOpDequeue, DeliveryTag: msg.DeliveryTag}); err != nil {
-		delete(s.unacked, msg.DeliveryTag)
-		s.ready = append([]Message{msg}, s.ready...)
+		s.state.restoreDequeue(msg)
 		return Message{}, false, err
 	}
-
-	return cloneMessage(msg), true, nil
+	return msg, true, nil
 }
 
 func (s *DurableMessageStore) Ack(deliveryTag uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if _, ok := s.unacked[deliveryTag]; !ok {
-		return fmt.Errorf("unknown delivery tag %d", deliveryTag)
+	msg, err := s.state.ack(deliveryTag)
+	if err != nil {
+		return err
 	}
-	msg := s.unacked[deliveryTag]
-	delete(s.unacked, deliveryTag)
 	if err := s.appendRecordLocked(walRecord{Op: walOpAck, DeliveryTag: deliveryTag}); err != nil {
-		s.unacked[deliveryTag] = msg
+		s.state.restoreAck(msg)
 		return err
 	}
 	return nil
@@ -168,51 +144,35 @@ func (s *DurableMessageStore) Ack(deliveryTag uint64) error {
 func (s *DurableMessageStore) Nack(deliveryTag uint64, requeue bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	msg, ok := s.unacked[deliveryTag]
-	if !ok {
-		return fmt.Errorf("unknown delivery tag %d", deliveryTag)
-	}
-	delete(s.unacked, deliveryTag)
-	original := cloneMessage(msg)
-
-	if requeue {
-		msg.Redelivered = true
-		s.ready = append([]Message{msg}, s.ready...)
-	}
-
-	if err := s.appendRecordLocked(walRecord{Op: walOpNack, DeliveryTag: deliveryTag, Requeue: requeue}); err != nil {
-		if requeue {
-			s.ready = s.ready[1:]
-		}
-		s.unacked[deliveryTag] = original
+	original, err := s.state.nack(deliveryTag, requeue)
+	if err != nil {
 		return err
 	}
-
+	if err := s.appendRecordLocked(walRecord{Op: walOpNack, DeliveryTag: deliveryTag, Requeue: requeue}); err != nil {
+		s.state.restoreNack(original, requeue)
+		return err
+	}
 	return nil
 }
 
 func (s *DurableMessageStore) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.ready)
+	return s.state.len()
 }
 
-// Stats returns ready/unacked counts.
 func (s *DurableMessageStore) Stats() QueueStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return QueueStats{Ready: len(s.ready), Unacked: len(s.unacked)}
+	return s.state.stats()
 }
 
-// Close releases the underlying WAL file.
 func (s *DurableMessageStore) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closeLocked()
 }
 
-// Destroy removes the WAL file for this queue.
 func (s *DurableMessageStore) Destroy() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -257,27 +217,22 @@ func (s *DurableMessageStore) replay() error {
 }
 
 func (s *DurableMessageStore) recoverUnackedLocked() error {
-	if len(s.unacked) == 0 {
+	if len(s.state.unacked) == 0 {
 		return nil
 	}
-
-	tags := make([]uint64, 0, len(s.unacked))
-	for tag := range s.unacked {
+	tags := make([]uint64, 0, len(s.state.unacked))
+	for tag := range s.state.unacked {
 		tags = append(tags, tag)
 	}
 	sort.Slice(tags, func(i, j int) bool { return tags[i] < tags[j] })
-
 	for i := len(tags) - 1; i >= 0; i-- {
-		tag := tags[i]
-		msg := s.unacked[tag]
-		delete(s.unacked, tag)
-		msg.Redelivered = true
-		s.ready = append([]Message{msg}, s.ready...)
-		if err := s.appendRecordLocked(walRecord{Op: walOpNack, DeliveryTag: tag, Requeue: true}); err != nil {
+		if _, err := s.state.nack(tags[i], true); err != nil {
+			return err
+		}
+		if err := s.appendRecordLocked(walRecord{Op: walOpNack, DeliveryTag: tags[i], Requeue: true}); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -291,36 +246,16 @@ func (s *DurableMessageStore) applyRecordLocked(record walRecord) error {
 		if err != nil {
 			return err
 		}
-		if msg.DeliveryTag >= s.nextTag {
-			s.nextTag = msg.DeliveryTag + 1
-		}
-		s.ready = append(s.ready, msg)
+		s.state.enqueueRecovered(msg)
 		return nil
 	case walOpDequeue:
-		msg, ok := removeReadyByTag(s.ready, record.DeliveryTag)
-		if !ok {
-			return fmt.Errorf("ready message %d not found", record.DeliveryTag)
-		}
-		s.ready = removeReadyTag(s.ready, record.DeliveryTag)
-		s.unacked[record.DeliveryTag] = msg
-		return nil
+		return s.state.dequeueByTag(record.DeliveryTag)
 	case walOpAck:
-		if _, ok := s.unacked[record.DeliveryTag]; !ok {
-			return fmt.Errorf("unknown delivery tag %d", record.DeliveryTag)
-		}
-		delete(s.unacked, record.DeliveryTag)
-		return nil
+		_, err := s.state.ack(record.DeliveryTag)
+		return err
 	case walOpNack:
-		msg, ok := s.unacked[record.DeliveryTag]
-		if !ok {
-			return fmt.Errorf("unknown delivery tag %d", record.DeliveryTag)
-		}
-		delete(s.unacked, record.DeliveryTag)
-		if record.Requeue {
-			msg.Redelivered = true
-			s.ready = append([]Message{msg}, s.ready...)
-		}
-		return nil
+		_, err := s.state.nack(record.DeliveryTag, record.Requeue)
+		return err
 	default:
 		return fmt.Errorf("unknown WAL op %q", record.Op)
 	}
@@ -508,22 +443,4 @@ func decodePersistedValue(value persistedValue) (any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported persisted value kind %q", value.Kind)
 	}
-}
-
-func removeReadyByTag(ready []Message, deliveryTag uint64) (Message, bool) {
-	for _, msg := range ready {
-		if msg.DeliveryTag == deliveryTag {
-			return msg, true
-		}
-	}
-	return Message{}, false
-}
-
-func removeReadyTag(ready []Message, deliveryTag uint64) []Message {
-	for i, msg := range ready {
-		if msg.DeliveryTag == deliveryTag {
-			return append(ready[:i], ready[i+1:]...)
-		}
-	}
-	return ready
 }

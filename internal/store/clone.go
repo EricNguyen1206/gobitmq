@@ -1,46 +1,36 @@
 package store
 
-func cloneMessage(msg Message) Message {
+func CloneMessage(msg Message) Message {
 	clone := msg
-	if msg.Body != nil {
-		clone.Body = append([]byte(nil), msg.Body...)
+	clone.Body = append([]byte(nil), msg.Body...)
+	clone.Headers = CloneTable(msg.Headers)
+	return clone
+}
+
+func CloneTable(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
 	}
-	if msg.Headers != nil {
-		clone.Headers = cloneHeaders(msg.Headers)
+	clone := make(map[string]any, len(values))
+	for key, value := range values {
+		clone[key] = cloneValue(value)
 	}
 	return clone
 }
 
-func cloneHeaders(headers map[string]any) map[string]any {
-	clone := make(map[string]any, len(headers))
-	for key, value := range headers {
-		switch v := value.(type) {
-		case []byte:
-			clone[key] = append([]byte(nil), v...)
-		case map[string]any:
-			clone[key] = cloneHeaders(v)
-		case []any:
-			clone[key] = cloneAnySlice(v)
-		default:
-			clone[key] = v
+func cloneValue(value any) any {
+	switch v := value.(type) {
+	case []byte:
+		return append([]byte(nil), v...)
+	case map[string]any:
+		return CloneTable(v)
+	case []any:
+		clone := make([]any, len(v))
+		for i, item := range v {
+			clone[i] = cloneValue(item)
 		}
+		return clone
+	default:
+		return v
 	}
-	return clone
-}
-
-func cloneAnySlice(values []any) []any {
-	clone := make([]any, 0, len(values))
-	for _, value := range values {
-		switch v := value.(type) {
-		case []byte:
-			clone = append(clone, append([]byte(nil), v...))
-		case map[string]any:
-			clone = append(clone, cloneHeaders(v))
-		case []any:
-			clone = append(clone, cloneAnySlice(v))
-		default:
-			clone = append(clone, v)
-		}
-	}
-	return clone
 }

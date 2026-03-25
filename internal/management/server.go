@@ -34,22 +34,38 @@ type Server struct {
 	Broker *amqpcore.Broker
 	AMQP   *amqp.Server
 	users  map[string]User
+
+	AllowRemote bool
+}
+
+type Config struct {
+	Addr        string
+	Users       []User
+	AllowRemote bool
 }
 
 func NewServer(addr string, broker *amqpcore.Broker, amqpServer *amqp.Server) *Server {
+	return NewServerWithConfig(Config{Addr: addr}, broker, amqpServer)
+}
+
+func NewServerWithConfig(cfg Config, broker *amqpcore.Broker, amqpServer *amqp.Server) *Server {
+	addr := cfg.Addr
 	if addr == "" {
 		addr = DefaultAddr
 	}
 	if broker == nil {
 		broker = amqpcore.NewBroker(nil)
 	}
+	users := cfg.Users
+	if len(users) == 0 {
+		users = DefaultUsers()
+	}
 	return &Server{
-		Addr:   addr,
-		Broker: broker,
-		AMQP:   amqpServer,
-		users: map[string]User{
-			"guest": {Username: "guest", Password: "guest", Role: RoleAdmin},
-		},
+		Addr:        addr,
+		Broker:      broker,
+		AMQP:        amqpServer,
+		users:       mapUsers(users),
+		AllowRemote: cfg.AllowRemote,
 	}
 }
 
@@ -59,20 +75,41 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/overview", s.withAuth(RoleMonitoring, s.handleOverview))
-	mux.HandleFunc("/api/connections", s.withAuth(RoleMonitoring, s.handleConnections))
-	mux.HandleFunc("/api/channels", s.withAuth(RoleMonitoring, s.handleChannels))
-	mux.HandleFunc("/api/exchanges", s.withAuth(RoleMonitoring, s.handleExchanges))
-	mux.HandleFunc("/api/queues", s.withAuth(RoleMonitoring, s.handleQueues))
-	mux.HandleFunc("/api/bindings", s.withAuth(RoleMonitoring, s.handleBindings))
+	mux.HandleFunc("/api/overview", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return newOverviewResponse(snap)
+	}))
+	mux.HandleFunc("/api/connections", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return snap.Connections
+	}))
+	mux.HandleFunc("/api/channels", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return snap.Channels
+	}))
+	mux.HandleFunc("/api/exchanges", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return snap.Broker.Exchanges
+	}))
+	mux.HandleFunc("/api/queues", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return snap.Broker.Queues
+	}))
+	mux.HandleFunc("/api/bindings", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+		return snap.Broker.Bindings
+	}))
 	mux.HandleFunc("/api/exchanges/", s.withAuth(RoleManagement, s.handleExchangeDeclare))
 	mux.HandleFunc("/api/queues/", s.withAuth(RoleManagement, s.handleQueueMutations))
 	return mux
 }
 
+func (s *Server) handleRead(minRole Role, view func(amqp.Snapshot) any) http.HandlerFunc {
+	return s.withAuth(minRole, func(w http.ResponseWriter, r *http.Request) {
+		if !requireMethod(w, r, http.MethodGet) {
+			return
+		}
+		writeJSON(w, view(s.snapshot()))
+	})
+}
+
 func (s *Server) withAuth(minRole Role, handler func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !isLocalhost(r.RemoteAddr) {
+		if !s.AllowRemote && !isLocalhost(r.RemoteAddr) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -115,98 +152,23 @@ func roleAllows(userRole Role, minRole Role, method string) bool {
 	return userRole == RoleManagement
 }
 
-func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	resp := overviewResponse{
-		ManagementVersion: "0.1.0",
-		Node:              "erionn@localhost",
-		ObjectTotals: objectTotals{
-			Connections: len(snap.Connections),
-			Channels:    len(snap.Channels),
-			Exchanges:   len(snap.Broker.Exchanges),
-			Queues:      len(snap.Broker.Queues),
-			Bindings:    len(snap.Broker.Bindings),
-		},
-		MessageStats: snap.Broker.MessageStats,
-	}
-	writeJSON(w, resp)
-}
-
-func (s *Server) handleConnections(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	writeJSON(w, snap.Connections)
-}
-
-func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	writeJSON(w, snap.Channels)
-}
-
-func (s *Server) handleExchanges(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	writeJSON(w, snap.Broker.Exchanges)
-}
-
-func (s *Server) handleQueues(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	writeJSON(w, snap.Broker.Queues)
-}
-
-func (s *Server) handleBindings(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	snap := s.snapshot()
-	writeJSON(w, snap.Broker.Bindings)
-}
-
 func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if !requireMethod(w, r, http.MethodPut) {
 		return
 	}
-	vhost, name, ok := parseEntityPath(r.URL.Path, "/api/exchanges/")
+	name, ok := entityName(w, r, "/api/exchanges/")
 	if !ok {
-		http.NotFound(w, r)
 		return
 	}
-	if vhost != "/" {
-		http.Error(w, "vhost not supported", http.StatusNotFound)
-		return
-	}
-
 	var req exchangeDeclareRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid json", http.StatusBadRequest)
-			return
-		}
+	if err := decodeOptionalJSON(r, &req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
 	}
 	if req.Type == "" {
 		req.Type = "direct"
 	}
-	kind, err := parseExchangeType(req.Type)
+	kind, err := amqpcore.ParseExchangeType(req.Type)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -219,24 +181,16 @@ func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleQueueMutations(w http.ResponseWriter, r *http.Request) {
-	vhost, name, ok := parseEntityPath(r.URL.Path, "/api/queues/")
+	name, ok := entityName(w, r, "/api/queues/")
 	if !ok {
-		http.NotFound(w, r)
 		return
 	}
-	if vhost != "/" {
-		http.Error(w, "vhost not supported", http.StatusNotFound)
-		return
-	}
-
 	switch r.Method {
 	case http.MethodPut:
 		var req queueDeclareRequest
-		if r.ContentLength > 0 {
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				http.Error(w, "invalid json", http.StatusBadRequest)
-				return
-			}
+		if err := decodeOptionalJSON(r, &req); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
 		}
 		if _, err := s.Broker.DeclareQueue(name, req.Durable, req.Exclusive, req.AutoDelete, req.Arguments); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -275,6 +229,53 @@ type exchangeDeclareRequest struct {
 	AutoDelete bool           `json:"auto_delete"`
 	Internal   bool           `json:"internal"`
 	Arguments  map[string]any `json:"arguments"`
+}
+
+func DefaultUsers() []User {
+	return []User{{Username: "guest", Password: "guest", Role: RoleAdmin}}
+}
+
+func newOverviewResponse(snap amqp.Snapshot) overviewResponse {
+	return overviewResponse{
+		ManagementVersion: "0.1.0",
+		Node:              "erionn@localhost",
+		ObjectTotals: objectTotals{
+			Connections: len(snap.Connections),
+			Channels:    len(snap.Channels),
+			Exchanges:   len(snap.Broker.Exchanges),
+			Queues:      len(snap.Broker.Queues),
+			Bindings:    len(snap.Broker.Bindings),
+		},
+		MessageStats: snap.Broker.MessageStats,
+	}
+}
+
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	return false
+}
+
+func decodeOptionalJSON(r *http.Request, dst any) error {
+	if r.ContentLength <= 0 {
+		return nil
+	}
+	return json.NewDecoder(r.Body).Decode(dst)
+}
+
+func entityName(w http.ResponseWriter, r *http.Request, prefix string) (string, bool) {
+	vhost, name, ok := parseEntityPath(r.URL.Path, prefix)
+	if !ok {
+		http.NotFound(w, r)
+		return "", false
+	}
+	if vhost != "/" {
+		http.Error(w, "vhost not supported", http.StatusNotFound)
+		return "", false
+	}
+	return name, true
 }
 
 type queueDeclareRequest struct {
@@ -327,15 +328,12 @@ func isLocalhost(remoteAddr string) bool {
 	return ip.IsLoopback()
 }
 
-func parseExchangeType(value string) (amqpcore.ExchangeType, error) {
-	switch amqpcore.ExchangeType(value) {
-	case amqpcore.ExchangeDirect, amqpcore.ExchangeFanout, amqpcore.ExchangeTopic:
-		return amqpcore.ExchangeType(value), nil
-	case amqpcore.ExchangeHeaders:
-		return "", errors.New("exchange type headers is not supported")
-	default:
-		return "", errors.New("unsupported exchange type")
+func mapUsers(users []User) map[string]User {
+	mapped := make(map[string]User, len(users))
+	for _, user := range users {
+		mapped[user.Username] = user
 	}
+	return mapped
 }
 
 func (s *Server) snapshot() amqp.Snapshot {
