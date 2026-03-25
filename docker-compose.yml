@@ -1,0 +1,14 @@
+services:
+  erionn-mq:
+    build: .
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      ERIONN_MGMT_ALLOW_REMOTE: "true"
+      ERIONN_MGMT_USERS: "guest:guest:admin"
+    volumes:
+      - erionn-data:/data
+
+volumes:
+  erionn-data:

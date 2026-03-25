@@ -4,7 +4,6 @@ import (
 	"strings"
 )
 
-// Binding represents the link between an exchange and a queue.
 type Binding struct {
 	ExchangeName string
 	QueueName    string
@@ -12,8 +11,6 @@ type Binding struct {
 	Args         map[string]any
 }
 
-// matches reports whether this binding should route msg to its queue,
-// given the exchange type of the owning exchange.
 func (b *Binding) matches(exchangeType ExchangeType, routingKey string) bool {
 	switch exchangeType {
 	case ExchangeDirect:
@@ -27,11 +24,6 @@ func (b *Binding) matches(exchangeType ExchangeType, routingKey string) bool {
 	}
 }
 
-// matchTopic implements AMQP topic routing key pattern matching.
-//
-// Pattern words are dot-separated. Special tokens:
-//   - '*' matches exactly one word
-//   - '#' matches zero or more words
 func matchTopic(pattern, key string) bool {
 	patternParts := strings.Split(pattern, ".")
 	keyParts := strings.Split(key, ".")
@@ -39,7 +31,6 @@ func matchTopic(pattern, key string) bool {
 }
 
 func matchParts(pattern, key []string) bool {
-	// Base cases
 	if len(pattern) == 0 && len(key) == 0 {
 		return true
 	}
@@ -48,15 +39,13 @@ func matchParts(pattern, key []string) bool {
 	}
 
 	if pattern[0] == "#" {
-		// '#' can consume zero words → try skipping it entirely,
-		// or consume one word at a time.
-		if matchParts(pattern[1:], key) { // zero words consumed
+		if matchParts(pattern[1:], key) {
 			return true
 		}
 		if len(key) == 0 {
 			return false
 		}
-		return matchParts(pattern, key[1:]) // consume one key word and retry
+		return matchParts(pattern, key[1:])
 	}
 
 	if len(key) == 0 {

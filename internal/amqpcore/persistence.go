@@ -42,8 +42,6 @@ type durableBindingState struct {
 	Args         map[string]any `json:"args,omitempty"`
 }
 
-// NewDurableBroker creates a broker that persists durable metadata and queue
-// contents under dataDir.
 func NewDurableBroker(dataDir string) (*Broker, error) {
 	if dataDir == "" {
 		return nil, errors.New("amqpcore: durable broker data directory is required")
@@ -102,7 +100,7 @@ func (b *Broker) loadMetadata() error {
 			Durable:    q.Durable,
 			Exclusive:  q.Exclusive,
 			AutoDelete: q.AutoDelete,
-			Args:       cloneArgs(q.Args),
+			Args:       store.CloneTable(q.Args),
 		})
 		if err != nil {
 			return err
@@ -158,7 +156,7 @@ func (b *Broker) persistMetadataLocked() error {
 			Durable:    q.Durable,
 			Exclusive:  q.Exclusive,
 			AutoDelete: q.AutoDelete,
-			Args:       cloneArgs(q.Args),
+			Args:       store.CloneTable(q.Args),
 		})
 	}
 	sort.Slice(state.Queues, func(i, j int) bool {
@@ -178,7 +176,7 @@ func (b *Broker) persistMetadataLocked() error {
 			ExchangeName: bind.ExchangeName,
 			QueueName:    bind.QueueName,
 			RoutingKey:   bind.RoutingKey,
-			Args:         cloneArgs(bind.Args),
+			Args:         store.CloneTable(bind.Args),
 		})
 	}
 	sort.Slice(state.Bindings, func(i, j int) bool {
@@ -230,41 +228,4 @@ func isDefaultExchange(name string) bool {
 	default:
 		return false
 	}
-}
-
-func cloneArgs(args map[string]any) map[string]any {
-	if len(args) == 0 {
-		return nil
-	}
-	clone := make(map[string]any, len(args))
-	for key, value := range args {
-		clone[key] = cloneArgValue(value)
-	}
-	return clone
-}
-
-func cloneArgValue(value any) any {
-	switch v := value.(type) {
-	case []byte:
-		return append([]byte(nil), v...)
-	case map[string]any:
-		return cloneArgs(v)
-	case []any:
-		clone := make([]any, 0, len(v))
-		for _, item := range v {
-			clone = append(clone, cloneArgValue(item))
-		}
-		return clone
-	default:
-		return v
-	}
-}
-
-func cloneMessage(msg Message) Message {
-	clone := msg
-	if msg.Body != nil {
-		clone.Body = append([]byte(nil), msg.Body...)
-	}
-	clone.Headers = cloneArgs(msg.Headers)
-	return clone
 }

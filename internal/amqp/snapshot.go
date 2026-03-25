@@ -10,7 +10,6 @@ import (
 	"erionn-mq/internal/amqpcore"
 )
 
-// Snapshot is a shared read model for management endpoints and metrics.
 type Snapshot struct {
 	GeneratedAt time.Time               `json:"generated_at"`
 	Broker      amqpcore.BrokerSnapshot `json:"broker"`
@@ -39,7 +38,6 @@ type ChannelView struct {
 	Unacked          int    `json:"unacked"`
 }
 
-// Snapshot returns a consistent snapshot of broker + connection state.
 func (s *Server) Snapshot() Snapshot {
 	s.mu.Lock()
 	conns := make([]*serverConn, 0, len(s.connections))
