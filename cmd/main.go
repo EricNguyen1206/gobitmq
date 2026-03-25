@@ -4,8 +4,8 @@ import (
 	"log"
 
 	"erionn-mq/internal/amqp"
-	"erionn-mq/internal/amqpcore"
 	"erionn-mq/internal/config"
+	"erionn-mq/internal/core"
 	"erionn-mq/internal/management"
 )
 
@@ -15,7 +15,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	broker, err := amqpcore.NewDurableBroker(cfg.DataDir)
+	broker, err := core.NewDurableBroker(cfg.DataDir)
 	if err != nil {
 		log.Fatal(err)
 	}

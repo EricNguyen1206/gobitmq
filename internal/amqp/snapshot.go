@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"erionn-mq/internal/amqpcore"
+	"erionn-mq/internal/core"
 )
 
 type Snapshot struct {
-	GeneratedAt time.Time               `json:"generated_at"`
-	Broker      amqpcore.BrokerSnapshot `json:"broker"`
-	Connections []ConnectionView        `json:"connections"`
-	Channels    []ChannelView           `json:"channels"`
+	GeneratedAt time.Time           `json:"generated_at"`
+	Broker      core.BrokerSnapshot `json:"broker"`
+	Connections []ConnectionView    `json:"connections"`
+	Channels    []ChannelView       `json:"channels"`
 }
 
 type ConnectionView struct {

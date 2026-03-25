@@ -9,7 +9,7 @@ import (
 )
 
 func TestDurableMessageStore_PersistsReadyMessagesAcrossRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "queue.wal")
+	path := filepath.Join(t.TempDir(), "queue.gob")
 
 	s, err := store.NewDurableMessageStore(path)
 	if err != nil {
@@ -56,7 +56,7 @@ func TestDurableMessageStore_PersistsReadyMessagesAcrossRestart(t *testing.T) {
 }
 
 func TestDurableMessageStore_RequeuesUnackedMessagesOnRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "queue.wal")
+	path := filepath.Join(t.TempDir(), "queue.gob")
 
 	s, err := store.NewDurableMessageStore(path)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestDurableMessageStore_RequeuesUnackedMessagesOnRestart(t *testing.T) {
 }
 
 func TestDurableMessageStore_AckedMessagesStayRemovedAfterRestart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "queue.wal")
+	path := filepath.Join(t.TempDir(), "queue.gob")
 
 	s, err := store.NewDurableMessageStore(path)
 	if err != nil {

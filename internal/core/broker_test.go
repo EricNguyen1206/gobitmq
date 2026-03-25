@@ -1,17 +1,17 @@
-package amqpcore_test
+package core_test
 
 import (
 	"fmt"
 	"sort"
 	"testing"
 
-	"erionn-mq/internal/amqpcore"
+	"erionn-mq/internal/core"
 	"erionn-mq/internal/store"
 )
 
 // helper: build a broker, declare queues, create bindings for a test scenario.
-func newBroker() *amqpcore.Broker {
-	return amqpcore.NewBroker(func() store.MessageStore {
+func newBroker() *core.Broker {
+	return core.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
 }
@@ -186,7 +186,7 @@ func TestBroker_Publish_DeliverToMatchingQueues(t *testing.T) {
 	b.BindQueue("amq.direct", "qa", "key-a", nil)
 	b.BindQueue("amq.direct", "qb", "key-b", nil)
 
-	msg := amqpcore.Message{Body: []byte("hello")}
+	msg := store.Message{Body: []byte("hello")}
 	if err := b.Publish("amq.direct", "key-a", msg); err != nil {
 		t.Fatal(err)
 	}
@@ -232,10 +232,10 @@ func TestBroker_DeclareQueue_AutoBindsDefaultExchange(t *testing.T) {
 
 func TestBroker_DeclareExchange_RedeclareMismatchErrors(t *testing.T) {
 	b := newBroker()
-	if _, err := b.DeclareExchange("logs", amqpcore.ExchangeDirect, false, false, false); err != nil {
+	if _, err := b.DeclareExchange("logs", core.ExchangeDirect, false, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.DeclareExchange("logs", amqpcore.ExchangeTopic, false, false, false); err == nil {
+	if _, err := b.DeclareExchange("logs", core.ExchangeTopic, false, false, false); err == nil {
 		t.Fatal("expected redeclare mismatch error, got nil")
 	}
 }

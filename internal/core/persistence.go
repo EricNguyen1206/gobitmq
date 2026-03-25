@@ -1,4 +1,4 @@
-package amqpcore
+package core
 
 import (
 	"crypto/sha1"
@@ -44,7 +44,7 @@ type durableBindingState struct {
 
 func NewDurableBroker(dataDir string) (*Broker, error) {
 	if dataDir == "" {
-		return nil, errors.New("amqpcore: durable broker data directory is required")
+		return nil, errors.New("core: durable broker data directory is required")
 	}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func (b *Broker) persistMetadataLocked() error {
 
 func durableQueueFileName(queueName string) string {
 	sum := sha1.Sum([]byte(queueName))
-	return fmt.Sprintf("%s-%s.wal", sanitizeQueueName(queueName), hex.EncodeToString(sum[:]))
+	return fmt.Sprintf("%s-%s.gob", sanitizeQueueName(queueName), hex.EncodeToString(sum[:]))
 }
 
 func sanitizeQueueName(queueName string) string {

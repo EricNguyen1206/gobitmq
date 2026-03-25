@@ -1,4 +1,4 @@
-package amqpcore
+package core
 
 import "net"
 

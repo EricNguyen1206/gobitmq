@@ -1,4 +1,4 @@
-package amqpcore
+package core
 
 import (
 	"errors"
@@ -218,7 +218,7 @@ func (b *Broker) bindQueueLocked(exchangeName, queueName, routingKey string, arg
 	return nil
 }
 
-func (b *Broker) Publish(exchangeName, routingKey string, msg Message) error {
+func (b *Broker) Publish(exchangeName, routingKey string, msg store.Message) error {
 	b.mu.RLock()
 	ex, ok := b.exchanges[exchangeName]
 	if !ok {
@@ -267,7 +267,7 @@ func (b *Broker) Route(exchangeName, routingKey string) ([]string, error) {
 	return queues, nil
 }
 
-func (b *Broker) DeadLetter(queueName string, msg Message, reason string) error {
+func (b *Broker) DeadLetter(queueName string, msg store.Message, reason string) error {
 	b.mu.RLock()
 	q, ok := b.queues[queueName]
 	if !ok {

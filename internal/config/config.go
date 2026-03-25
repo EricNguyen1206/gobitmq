@@ -37,7 +37,7 @@ func Load() (Config, error) {
 	if value := strings.TrimSpace(os.Getenv(envManagementAllow)); value != "" {
 		allowed, err := parseBool(value)
 		if err != nil {
-			return cfg, err
+			return Config{}, err
 		}
 		cfg.ManagementAllowRemote = allowed
 	}
@@ -45,7 +45,7 @@ func Load() (Config, error) {
 	if value := strings.TrimSpace(os.Getenv(envManagementUsers)); value != "" {
 		users, err := parseUsers(value)
 		if err != nil {
-			return cfg, err
+			return Config{}, err
 		}
 		cfg.ManagementUsers = users
 	}

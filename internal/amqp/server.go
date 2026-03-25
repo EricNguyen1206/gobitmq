@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"erionn-mq/internal/amqpcore"
+	"erionn-mq/internal/core"
 	"erionn-mq/internal/store"
 )
 
@@ -18,7 +18,7 @@ var errConnectionClosed = errors.New("amqp: connection closed")
 
 type Server struct {
 	Addr   string
-	broker *amqpcore.Broker
+	broker *core.Broker
 
 	nextConnID     atomic.Uint64
 	nextQueueID    atomic.Uint64
@@ -30,9 +30,9 @@ type Server struct {
 
 type serverConn struct {
 	server   *Server
-	broker   *amqpcore.Broker
+	broker   *core.Broker
 	netConn  net.Conn
-	amqpConn *amqpcore.Connection
+	amqpConn *core.Connection
 
 	writeMu  sync.Mutex
 	mu       sync.Mutex
@@ -44,8 +44,8 @@ type serverConn struct {
 }
 
 type channelState struct {
-	broker  *amqpcore.Broker
-	channel *amqpcore.Channel
+	broker  *core.Broker
+	channel *core.Channel
 
 	mu              sync.Mutex
 	nextDeliveryTag uint64
@@ -59,7 +59,7 @@ type deliveryRef struct {
 	queueName   string
 	storeTag    uint64
 	consumerTag string
-	msg         amqpcore.Message
+	msg         store.Message
 }
 
 type consumerState struct {
@@ -71,12 +71,12 @@ type consumerState struct {
 	stopped   atomic.Bool
 }
 
-func NewServer(addr string, broker *amqpcore.Broker) *Server {
+func NewServer(addr string, broker *core.Broker) *Server {
 	if addr == "" {
 		addr = DefaultAddr
 	}
 	if broker == nil {
-		broker = amqpcore.NewBroker(func() store.MessageStore {
+		broker = core.NewBroker(func() store.MessageStore {
 			return store.NewMemoryMessageStore()
 		})
 	}
@@ -124,7 +124,7 @@ func (s *Server) newConn(netConn net.Conn) *serverConn {
 		server:  s,
 		broker:  s.broker,
 		netConn: netConn,
-		amqpConn: &amqpcore.Connection{
+		amqpConn: &core.Connection{
 			ID:   id,
 			Conn: netConn,
 		},
@@ -301,10 +301,10 @@ func (c *serverConn) handleChannelOpen(id uint16) error {
 	if _, exists := c.channels[id]; !exists {
 		c.channels[id] = &channelState{
 			broker: c.broker,
-			channel: &amqpcore.Channel{
+			channel: &core.Channel{
 				ID:         id,
 				Connection: c.amqpConn,
-				Consumers:  make(map[string]*amqpcore.ConsumerSubscription),
+				Consumers:  make(map[string]*core.ConsumerSubscription),
 			},
 			nextDeliveryTag: 1,
 			nextPublishSeq:  1,
@@ -331,7 +331,7 @@ func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) er
 		return err
 	}
 
-	kind, err := amqpcore.ParseExchangeType(m.Type)
+	kind, err := core.ParseExchangeType(m.Type)
 	if err != nil {
 		return err
 	}
@@ -362,7 +362,7 @@ func (c *serverConn) handleQueueDeclare(channel uint16, m QueueDeclare) error {
 		queueName = fmt.Sprintf("amq.gen-%d", c.server.nextQueueID.Add(1))
 	}
 
-	var q *amqpcore.Queue
+	var q *core.Queue
 	var err error
 	if m.Passive {
 		q, err = c.broker.GetQueue(queueName)
@@ -420,7 +420,7 @@ func (c *serverConn) handleBasicPublish(channel uint16, m BasicPublish) error {
 		return fmt.Errorf("amqp: publish content header class=%d, want %d", header.ClassID, classBasic)
 	}
 
-	msg := amqpcore.Message{
+	msg := store.Message{
 		ContentType:   header.Properties.ContentType,
 		CorrelationID: header.Properties.CorrelationID,
 		ReplyTo:       header.Properties.ReplyTo,
@@ -669,7 +669,7 @@ func (c *serverConn) sendMethod(channel uint16, method Method) error {
 	return c.writeFrames(frame)
 }
 
-func (c *serverConn) sendDelivery(channel uint16, consumerTag string, deliveryTag uint64, msg amqpcore.Message) error {
+func (c *serverConn) sendDelivery(channel uint16, consumerTag string, deliveryTag uint64, msg store.Message) error {
 	deliverFrame, err := EncodeMethodFrame(channel, BasicDeliver{
 		ConsumerTag: consumerTag,
 		DeliveryTag: deliveryTag,
@@ -881,7 +881,7 @@ func (ch *channelState) addConsumer(consumer *consumerState) error {
 		return fmt.Errorf("amqp: consumer %q already exists", consumer.tag)
 	}
 	ch.consumers[consumer.tag] = consumer
-	ch.channel.Consumers[consumer.tag] = &amqpcore.ConsumerSubscription{
+	ch.channel.Consumers[consumer.tag] = &core.ConsumerSubscription{
 		Tag:     consumer.tag,
 		Queue:   consumer.queueName,
 		Channel: ch.channel,
@@ -914,7 +914,7 @@ func (ch *channelState) stopAllConsumers() {
 		refs = append(refs, ref)
 	}
 	ch.consumers = make(map[string]*consumerState)
-	ch.channel.Consumers = make(map[string]*amqpcore.ConsumerSubscription)
+	ch.channel.Consumers = make(map[string]*core.ConsumerSubscription)
 	ch.inFlight = make(map[uint64]deliveryRef)
 	for _, consumer := range consumers {
 		consumer.stopConsuming()
@@ -947,7 +947,7 @@ func (ch *channelState) canDispatch(consumerTag string) bool {
 	return consumer.unacked < ch.channel.ConsumerPrefetchCount
 }
 
-func (ch *channelState) reserveDelivery(consumerTag, queueName string, storeTag uint64, msg amqpcore.Message, autoAck bool) (uint64, bool) {
+func (ch *channelState) reserveDelivery(consumerTag, queueName string, storeTag uint64, msg store.Message, autoAck bool) (uint64, bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 

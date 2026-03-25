@@ -1,20 +1,21 @@
-package amqpcore_test
+package core_test
 
 import (
 	"path/filepath"
 	"testing"
 
-	"erionn-mq/internal/amqpcore"
+	"erionn-mq/internal/core"
+	"erionn-mq/internal/store"
 )
 
 func TestDurableBroker_RestoresDurableTopologyAndMessages(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "broker")
 
-	broker, err := amqpcore.NewDurableBroker(dataDir)
+	broker, err := core.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := broker.DeclareExchange("orders", amqpcore.ExchangeDirect, true, false, false); err != nil {
+	if _, err := broker.DeclareExchange("orders", core.ExchangeDirect, true, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := broker.DeclareQueue("jobs", true, false, false, nil); err != nil {
@@ -23,14 +24,14 @@ func TestDurableBroker_RestoresDurableTopologyAndMessages(t *testing.T) {
 	if err := broker.BindQueue("orders", "jobs", "jobs.created", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.Publish("orders", "jobs.created", amqpcore.Message{Body: []byte("hello")}); err != nil {
+	if err := broker.Publish("orders", "jobs.created", store.Message{Body: []byte("hello")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := broker.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := amqpcore.NewDurableBroker(dataDir)
+	reopened, err := core.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ func TestDurableBroker_RestoresDurableTopologyAndMessages(t *testing.T) {
 func TestDurableBroker_DeleteQueueRemovesPersistedState(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "broker")
 
-	broker, err := amqpcore.NewDurableBroker(dataDir)
+	broker, err := core.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestDurableBroker_DeleteQueueRemovesPersistedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := queue.Enqueue(amqpcore.Message{Body: []byte("hello")}); err != nil {
+	if _, err := queue.Enqueue(store.Message{Body: []byte("hello")}); err != nil {
 		t.Fatal(err)
 	}
 	if err := broker.DeleteQueue("jobs"); err != nil {
@@ -90,7 +91,7 @@ func TestDurableBroker_DeleteQueueRemovesPersistedState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	reopened, err := amqpcore.NewDurableBroker(dataDir)
+	reopened, err := core.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

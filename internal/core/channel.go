@@ -1,4 +1,6 @@
-package amqpcore
+package core
+
+import "erionn-mq/internal/store"
 
 type Channel struct {
 	ID                    uint16
@@ -21,5 +23,5 @@ type ConsumerSubscription struct {
 	Queue   string
 	Channel *Channel
 	AutoAck bool
-	Deliver func(msg Message)
+	Deliver func(msg store.Message)
 }

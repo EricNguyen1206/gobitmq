@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"erionn-mq/internal/amqp"
-	"erionn-mq/internal/amqpcore"
+	"erionn-mq/internal/core"
 )
 
 const DefaultAddr = ":15672"
@@ -31,7 +31,7 @@ type User struct {
 
 type Server struct {
 	Addr   string
-	Broker *amqpcore.Broker
+	Broker *core.Broker
 	AMQP   *amqp.Server
 	users  map[string]User
 
@@ -44,17 +44,17 @@ type Config struct {
 	AllowRemote bool
 }
 
-func NewServer(addr string, broker *amqpcore.Broker, amqpServer *amqp.Server) *Server {
+func NewServer(addr string, broker *core.Broker, amqpServer *amqp.Server) *Server {
 	return NewServerWithConfig(Config{Addr: addr}, broker, amqpServer)
 }
 
-func NewServerWithConfig(cfg Config, broker *amqpcore.Broker, amqpServer *amqp.Server) *Server {
+func NewServerWithConfig(cfg Config, broker *core.Broker, amqpServer *amqp.Server) *Server {
 	addr := cfg.Addr
 	if addr == "" {
 		addr = DefaultAddr
 	}
 	if broker == nil {
-		broker = amqpcore.NewBroker(nil)
+		broker = core.NewBroker(nil)
 	}
 	users := cfg.Users
 	if len(users) == 0 {
@@ -168,7 +168,7 @@ func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
 	if req.Type == "" {
 		req.Type = "direct"
 	}
-	kind, err := amqpcore.ParseExchangeType(req.Type)
+	kind, err := core.ParseExchangeType(req.Type)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -209,10 +209,10 @@ func (s *Server) handleQueueMutations(w http.ResponseWriter, r *http.Request) {
 }
 
 type overviewResponse struct {
-	ManagementVersion string                `json:"management_version"`
-	Node              string                `json:"node"`
-	ObjectTotals      objectTotals          `json:"object_totals"`
-	MessageStats      amqpcore.MessageStats `json:"message_stats"`
+	ManagementVersion string            `json:"management_version"`
+	Node              string            `json:"node"`
+	ObjectTotals      objectTotals      `json:"object_totals"`
+	MessageStats      core.MessageStats `json:"message_stats"`
 }
 
 type objectTotals struct {
