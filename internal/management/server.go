@@ -30,9 +30,9 @@ type User struct {
 }
 
 type Server struct {
-	Addr   string
-	Broker *core.Broker
-	AMQP   *amqp.Server
+	addr   string
+	broker *core.Broker
+	amqp   *amqp.Server
 	users  map[string]User
 
 	AllowRemote bool
@@ -42,10 +42,6 @@ type Config struct {
 	Addr        string
 	Users       []User
 	AllowRemote bool
-}
-
-func NewServer(addr string, broker *core.Broker, amqpServer *amqp.Server) *Server {
-	return NewServerWithConfig(Config{Addr: addr}, broker, amqpServer)
 }
 
 func NewServerWithConfig(cfg Config, broker *core.Broker, amqpServer *amqp.Server) *Server {
@@ -61,16 +57,16 @@ func NewServerWithConfig(cfg Config, broker *core.Broker, amqpServer *amqp.Serve
 		users = DefaultUsers()
 	}
 	return &Server{
-		Addr:        addr,
-		Broker:      broker,
-		AMQP:        amqpServer,
+		addr:        addr,
+		broker:      broker,
+		amqp:        amqpServer,
 		users:       mapUsers(users),
 		AllowRemote: cfg.AllowRemote,
 	}
 }
 
 func (s *Server) ListenAndServe() error {
-	return http.ListenAndServe(s.Addr, s.routes())
+	return http.ListenAndServe(s.addr, s.routes())
 }
 
 func (s *Server) routes() http.Handler {
@@ -173,7 +169,7 @@ func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.Broker.DeclareExchange(name, kind, req.Durable, req.AutoDelete, req.Internal); err != nil {
+	if _, err := s.broker.DeclareExchange(name, kind, req.Durable, req.AutoDelete, req.Internal); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -192,13 +188,13 @@ func (s *Server) handleQueueMutations(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
-		if _, err := s.Broker.DeclareQueue(name, req.Durable, req.Exclusive, req.AutoDelete, req.Arguments); err != nil {
+		if _, err := s.broker.DeclareQueue(name, req.Durable, req.Exclusive, req.AutoDelete, req.Arguments); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
 	case http.MethodDelete:
-		if err := s.Broker.DeleteQueue(name); err != nil {
+		if err := s.broker.DeleteQueue(name); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
@@ -337,8 +333,8 @@ func mapUsers(users []User) map[string]User {
 }
 
 func (s *Server) snapshot() amqp.Snapshot {
-	if s.AMQP != nil {
-		return s.AMQP.Snapshot()
+	if s.amqp != nil {
+		return s.amqp.Snapshot()
 	}
-	return amqp.Snapshot{Broker: s.Broker.Snapshot()}
+	return amqp.Snapshot{Broker: s.broker.Snapshot()}
 }

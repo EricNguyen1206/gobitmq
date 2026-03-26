@@ -55,7 +55,7 @@ func NewDurableBroker(dataDir string) (*Broker, error) {
 		return nil, err
 	}
 
-	b := NewBrokerWithQueueStoreFactory(func(cfg QueueConfig) (store.MessageStore, error) {
+	b := newBrokerWithQueueStoreFactory(func(cfg queueConfig) (store.MessageStore, error) {
 		if !cfg.Durable {
 			return store.NewMemoryMessageStore(), nil
 		}
@@ -95,7 +95,7 @@ func (b *Broker) loadMetadata() error {
 	}
 
 	for _, q := range state.Queues {
-		store, err := b.storeFactory(QueueConfig{
+		store, err := b.storeFactory(queueConfig{
 			Name:       q.Name,
 			Durable:    q.Durable,
 			Exclusive:  q.Exclusive,

@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./...
+
+  go-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Go integration tests (amqp091-go)
+        working-directory: test/integration
+        run: go test -v -count=1 -timeout 120s ./...
+
+  node-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build broker binary
+        run: go build -o /tmp/erionn-mq ./cmd
+
+      - name: Install Node.js dependencies
+        working-directory: test/integration
+        run: npm ci
+
+      - name: amqplib smoke test
+        working-directory: test/integration
+        run: |
+          /tmp/erionn-mq &
+          sleep 2
+          node amqplib-smoke.mjs
+          kill %1 2>/dev/null || true
+        env:
+          ERIONN_AMQP_ADDR: "127.0.0.1:5672"
+          ERIONN_MGMT_ADDR: "127.0.0.1:15672"
+          ERIONN_DATA_DIR: "/tmp/erionn-smoke-data"
+          ERIONN_MGMT_USERS: "guest:guest:admin"
+          ERIONN_MGMT_ALLOW_REMOTE: "true"
+
+      - name: amqplib compat test
+        working-directory: test/integration
+        run: node amqplib-compat.mjs
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t erionn-mq .

@@ -2,7 +2,6 @@ package core_test
 
 import (
 	"fmt"
-	"sort"
 	"testing"
 
 	"erionn-mq/internal/core"
@@ -14,11 +13,6 @@ func newBroker() *core.Broker {
 	return core.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-}
-
-func sorted(ss []string) []string {
-	sort.Strings(ss)
-	return ss
 }
 
 // --------------------------------------------------------------------------

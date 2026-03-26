@@ -29,13 +29,6 @@ func (s *queueState) rollbackEnqueue(tag uint64) {
 	}
 }
 
-func (s *queueState) enqueueRecovered(msg Message) {
-	if msg.DeliveryTag >= s.nextTag {
-		s.nextTag = msg.DeliveryTag + 1
-	}
-	s.ready = append(s.ready, msg)
-}
-
 func (s *queueState) dequeue() (Message, bool) {
 	if len(s.ready) == 0 {
 		return Message{}, false
@@ -49,17 +42,6 @@ func (s *queueState) dequeue() (Message, bool) {
 func (s *queueState) restoreDequeue(msg Message) {
 	delete(s.unacked, msg.DeliveryTag)
 	s.ready = append([]Message{CloneMessage(msg)}, s.ready...)
-}
-
-func (s *queueState) dequeueByTag(tag uint64) error {
-	for i, msg := range s.ready {
-		if msg.DeliveryTag == tag {
-			s.ready = append(s.ready[:i], s.ready[i+1:]...)
-			s.unacked[tag] = msg
-			return nil
-		}
-	}
-	return fmt.Errorf("ready message %d not found", tag)
 }
 
 func (s *queueState) ack(tag uint64) (Message, error) {

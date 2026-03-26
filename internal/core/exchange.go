@@ -8,7 +8,7 @@ const (
 	ExchangeDirect  ExchangeType = "direct"
 	ExchangeTopic   ExchangeType = "topic"
 	ExchangeFanout  ExchangeType = "fanout"
-	ExchangeHeaders ExchangeType = "headers"
+	exchangeHeaders ExchangeType = "headers"
 )
 
 type Exchange struct {
@@ -33,7 +33,7 @@ func ParseExchangeType(value string) (ExchangeType, error) {
 	switch ExchangeType(value) {
 	case ExchangeDirect, ExchangeFanout, ExchangeTopic:
 		return ExchangeType(value), nil
-	case ExchangeHeaders:
+	case exchangeHeaders:
 		return "", fmt.Errorf("exchange type %q is not supported yet", value)
 	default:
 		return "", fmt.Errorf("unsupported exchange type %q", value)

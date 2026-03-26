@@ -28,7 +28,7 @@ func main() {
 		Users:       cfg.ManagementUsers,
 		AllowRemote: cfg.ManagementAllowRemote,
 	}, broker, server)
-	log.Printf("Management API listening on %s", mgmt.Addr)
+	log.Printf("Management API listening on %s", cfg.ManagementAddr)
 	go func() {
 		if err := mgmt.ListenAndServe(); err != nil {
 			log.Fatal(err)

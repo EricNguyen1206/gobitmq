@@ -15,11 +15,11 @@ type Broker struct {
 	queues       map[string]*Queue
 	bindings     []*Binding
 	metrics      brokerMetrics
-	storeFactory QueueStoreFactory
+	storeFactory queueStoreFactory
 	metadataPath string
 }
 
-type QueueConfig struct {
+type queueConfig struct {
 	Name       string
 	Durable    bool
 	Exclusive  bool
@@ -27,7 +27,7 @@ type QueueConfig struct {
 	Args       map[string]any
 }
 
-type QueueStoreFactory func(QueueConfig) (store.MessageStore, error)
+type queueStoreFactory func(queueConfig) (store.MessageStore, error)
 
 func NewBroker(storeFactory func() store.MessageStore) *Broker {
 	if storeFactory == nil {
@@ -35,14 +35,14 @@ func NewBroker(storeFactory func() store.MessageStore) *Broker {
 			return store.NewMemoryMessageStore()
 		}
 	}
-	return NewBrokerWithQueueStoreFactory(func(QueueConfig) (store.MessageStore, error) {
+	return newBrokerWithQueueStoreFactory(func(queueConfig) (store.MessageStore, error) {
 		return storeFactory(), nil
 	})
 }
 
-func NewBrokerWithQueueStoreFactory(storeFactory QueueStoreFactory) *Broker {
+func newBrokerWithQueueStoreFactory(storeFactory queueStoreFactory) *Broker {
 	if storeFactory == nil {
-		storeFactory = func(QueueConfig) (store.MessageStore, error) {
+		storeFactory = func(queueConfig) (store.MessageStore, error) {
 			return store.NewMemoryMessageStore(), nil
 		}
 	}
@@ -108,7 +108,7 @@ func (b *Broker) DeclareQueue(name string, durable, exclusive, autoDelete bool, 
 		}
 		return q, nil
 	}
-	store, err := b.storeFactory(QueueConfig{
+	store, err := b.storeFactory(queueConfig{
 		Name:       name,
 		Durable:    durable,
 		Exclusive:  exclusive,

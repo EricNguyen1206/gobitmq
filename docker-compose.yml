@@ -6,7 +6,7 @@ services:
       - "15672:15672"
     environment:
       ERIONN_MGMT_ALLOW_REMOTE: "true"
-      ERIONN_MGMT_USERS: "guest:guest:admin"
+      ERIONN_MGMT_USERS: "admin:admin123:admin"
     volumes:
       - erionn-data:/data
 

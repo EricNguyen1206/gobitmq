@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -592,5 +593,205 @@ func TestReconnectAfterRestart(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout: new connection failed after restart")
+	}
+}
+
+func TestMultipleConcurrentConnections(t *testing.T) {
+	b := startBroker(t)
+	defer b.stop(t)
+
+	queue := unique("go-compat.multi-conn")
+	const numConns = 10
+
+	conns := make([]*amqp.Connection, numConns)
+	for i := range conns {
+		conns[i] = connect(t, b.amqpURL)
+	}
+
+	for _, conn := range conns {
+		ch := openChannel(t, conn)
+		defer ch.Close()
+
+		if _, err := ch.QueueDeclare(queue, false, false, false, false, nil); err != nil {
+			if !strings.Contains(err.Error(), "already declared") {
+				t.Fatalf("QueueDeclare on conn: %v", err)
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := ch.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{
+			Body: []byte("from-conn"),
+		}); err != nil {
+			t.Fatalf("Publish on conn: %v", err)
+		}
+	}
+
+	for i, conn := range conns {
+		if err := conn.Close(); err != nil {
+			t.Fatalf("close conn %d: %v", i, err)
+		}
+	}
+
+	conn := connect(t, b.amqpURL)
+	defer conn.Close()
+	ch := openChannel(t, conn)
+	defer ch.Close()
+
+	msgs, err := ch.Consume(queue, "", false, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+
+	var received int
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for received < numConns {
+		select {
+		case msg := <-msgs:
+			received++
+			if err := msg.Ack(false); err != nil {
+				t.Fatalf("Ack %d: %v", received, err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("timeout: received %d of %d messages", received, numConns)
+		}
+	}
+}
+
+func TestMultipleChannelsPerConnection(t *testing.T) {
+	b := startBroker(t)
+	defer b.stop(t)
+
+	queue := unique("go-compat.multi-ch")
+	const numChannels = 20
+
+	conn := connect(t, b.amqpURL)
+	defer conn.Close()
+
+	channels := make([]*amqp.Channel, numChannels)
+	for i := range channels {
+		channels[i] = openChannel(t, conn)
+	}
+
+	for _, ch := range channels {
+		if _, err := ch.QueueDeclare(queue, false, false, false, false, nil); err != nil {
+			if !strings.Contains(err.Error(), "already declared") {
+				t.Fatalf("QueueDeclare on channel: %v", err)
+			}
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, ch := range channels {
+		if err := ch.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{
+			Body: []byte("from-ch"),
+		}); err != nil {
+			t.Fatalf("Publish on channel: %v", err)
+		}
+	}
+
+	for _, ch := range channels {
+		if err := ch.Close(); err != nil {
+			t.Fatalf("close channel: %v", err)
+		}
+	}
+
+	ch := openChannel(t, conn)
+	defer ch.Close()
+	msgs, err := ch.Consume(queue, "", false, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+
+	var received int
+	for received < numChannels {
+		select {
+		case msg := <-msgs:
+			received++
+			if err := msg.Ack(false); err != nil {
+				t.Fatalf("Ack %d: %v", received, err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("timeout: received %d of %d messages", received, numChannels)
+		}
+	}
+}
+
+func TestChannelCloseCleansUpConsumers(t *testing.T) {
+	b := startBroker(t)
+	defer b.stop(t)
+
+	queue := unique("go-compat.ch-close")
+
+	conn := connect(t, b.amqpURL)
+	defer conn.Close()
+
+	ch := openChannel(t, conn)
+	if _, err := ch.QueueDeclare(queue, false, false, false, false, nil); err != nil {
+		t.Fatalf("QueueDeclare: %v", err)
+	}
+
+	if _, err := ch.Consume(queue, "closer", false, false, false, false, nil); err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+
+	if err := ch.Close(); err != nil {
+		t.Fatalf("Channel.Close: %v", err)
+	}
+
+	ch2 := openChannel(t, conn)
+	defer ch2.Close()
+
+	if _, err := ch2.Consume(queue, "closer", false, false, false, false, nil); err != nil {
+		t.Fatalf("Consume with same tag after channel close: %v", err)
+	}
+}
+
+func TestConnectionCloseCleansUpChannels(t *testing.T) {
+	b := startBroker(t)
+	defer b.stop(t)
+
+	queue := unique("go-compat.conn-close")
+
+	conn := connect(t, b.amqpURL)
+	ch := openChannel(t, conn)
+	if _, err := ch.QueueDeclare(queue, false, false, false, false, nil); err != nil {
+		t.Fatalf("QueueDeclare: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Connection.Close: %v", err)
+	}
+
+	conn2 := connect(t, b.amqpURL)
+	defer conn2.Close()
+	ch2 := openChannel(t, conn2)
+	defer ch2.Close()
+
+	if _, err := ch2.QueueDeclare(queue, false, false, false, false, nil); err != nil {
+		if !strings.Contains(err.Error(), "already declared") {
+			t.Fatalf("QueueDeclare after reconnect: %v", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ch2.PublishWithContext(ctx, "", queue, false, false, amqp.Publishing{Body: []byte("ok")}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	msgs, err := ch2.Consume(queue, "", false, false, false, false, nil)
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	select {
+	case msg := <-msgs:
+		if string(msg.Body) != "ok" {
+			t.Fatalf("unexpected body: %q", msg.Body)
+		}
+		msg.Ack(false)
+	case <-ctx.Done():
+		t.Fatal("timeout: publish/consume failed after connection close")
 	}
 }
