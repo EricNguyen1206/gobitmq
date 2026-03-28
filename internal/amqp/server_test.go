@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
+	"erionn-mq/internal/config"
 	"erionn-mq/internal/store"
 )
 
@@ -246,10 +247,10 @@ func TestServer_BasicQos_GlobalTrueLimitsWholeChannel(t *testing.T) {
 }
 
 func TestChannelState_StopAllConsumers_RequeuesInFlightMessages(t *testing.T) {
-	broker := core.NewBroker(func() store.MessageStore {
+	br := broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-	q, err := broker.DeclareQueue("jobs", false, false, false, nil)
+	q, err := br.DeclareQueue("jobs", false, false, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,9 +267,9 @@ func TestChannelState_StopAllConsumers_RequeuesInFlightMessages(t *testing.T) {
 	}
 
 	ch := &channelState{
-		broker: broker,
-		channel: &core.Channel{
-			Consumers: make(map[string]*core.ConsumerSubscription),
+		broker: br,
+		channel: &broker.Channel{
+			Consumers: make(map[string]*broker.ConsumerSubscription),
 		},
 		inFlight: map[uint64]deliveryRef{
 			1: {queueName: "jobs", storeTag: msg.DeliveryTag},
@@ -296,21 +297,21 @@ func TestChannelState_StopAllConsumers_RequeuesInFlightMessages(t *testing.T) {
 }
 
 func TestServer_HandleChannelClose_RequeuesInFlightMessages(t *testing.T) {
-	broker := core.NewBroker(func() store.MessageStore {
+	br := broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-	q, msg := dequeueUnackedMessage(t, broker, "jobs")
+	q, msg := dequeueUnackedMessage(t, br, "jobs")
 
 	conn := &serverConn{
-		broker:   broker,
+		broker:   br,
 		netConn:  discardConn{},
 		channels: make(map[uint16]*channelState),
 		done:     make(chan struct{}),
 	}
 	conn.channels[1] = &channelState{
-		broker: broker,
-		channel: &core.Channel{
-			Consumers: make(map[string]*core.ConsumerSubscription),
+		broker: br,
+		channel: &broker.Channel{
+			Consumers: make(map[string]*broker.ConsumerSubscription),
 		},
 		inFlight: map[uint64]deliveryRef{
 			1: {queueName: "jobs", storeTag: msg.DeliveryTag},
@@ -329,23 +330,23 @@ func TestServer_HandleChannelClose_RequeuesInFlightMessages(t *testing.T) {
 }
 
 func TestServerConn_Close_RequeuesInFlightMessages(t *testing.T) {
-	broker := core.NewBroker(func() store.MessageStore {
+	br := broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-	q, msg := dequeueUnackedMessage(t, broker, "jobs")
+	q, msg := dequeueUnackedMessage(t, br, "jobs")
 
 	conn := &serverConn{
 		server:   &Server{connections: make(map[uint64]*serverConn)},
-		broker:   broker,
+		broker:   br,
 		netConn:  discardConn{},
-		amqpConn: &core.Connection{ID: 1},
+		amqpConn: &broker.Connection{ID: 1},
 		channels: make(map[uint16]*channelState),
 		done:     make(chan struct{}),
 	}
 	conn.channels[1] = &channelState{
-		broker: broker,
-		channel: &core.Channel{
-			Consumers: make(map[string]*core.ConsumerSubscription),
+		broker: br,
+		channel: &broker.Channel{
+			Consumers: make(map[string]*broker.ConsumerSubscription),
 		},
 		inFlight: map[uint64]deliveryRef{
 			1: {queueName: "jobs", storeTag: msg.DeliveryTag},
@@ -415,10 +416,10 @@ type dummyAddr string
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
 
-func dequeueUnackedMessage(t *testing.T, broker *core.Broker, queueName string) (*core.Queue, store.Message) {
+func dequeueUnackedMessage(t *testing.T, br *broker.Broker, queueName string) (*broker.Queue, store.Message) {
 	t.Helper()
 
-	q, err := broker.DeclareQueue(queueName, false, false, false, nil)
+	q, err := br.DeclareQueue(queueName, false, false, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,10 +439,10 @@ func dequeueUnackedMessage(t *testing.T, broker *core.Broker, queueName string) 
 func newTestClient(t *testing.T) *testClient {
 	t.Helper()
 
-	broker := core.NewBroker(func() store.MessageStore {
+	br := broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-	server := NewServer("127.0.0.1:0", broker)
+	server := NewServer("127.0.0.1:0", br)
 
 	ln, err := net.Listen("tcp", server.Addr)
 	if err != nil {
@@ -670,10 +671,10 @@ func (c *testClient) readMethod(t *testing.T) Method {
 }
 
 func ExampleServer() {
-	broker := core.NewBroker(func() store.MessageStore {
+	br := broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
-	server := NewServer(DefaultAddr, broker)
+	server := NewServer(config.DefaultAMQPAddr, br)
 	fmt.Println(server.Addr)
 	// Output: :5672
 }

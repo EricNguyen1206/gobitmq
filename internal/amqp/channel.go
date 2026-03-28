@@ -5,13 +5,13 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 	"erionn-mq/internal/store"
 )
 
 type channelState struct {
-	broker  *core.Broker
-	channel *core.Channel
+	broker  *broker.Broker
+	channel *broker.Channel
 
 	mu              sync.Mutex
 	nextDeliveryTag uint64
@@ -69,10 +69,10 @@ func (c *serverConn) handleChannelOpen(id uint16) error {
 	if _, exists := c.channels[id]; !exists {
 		c.channels[id] = &channelState{
 			broker: c.broker,
-			channel: &core.Channel{
+			channel: &broker.Channel{
 				ID:         id,
 				Connection: c.amqpConn,
-				Consumers:  make(map[string]*core.ConsumerSubscription),
+				Consumers:  make(map[string]*broker.ConsumerSubscription),
 			},
 			nextDeliveryTag: 1,
 			nextPublishSeq:  1,
@@ -102,7 +102,7 @@ func (ch *channelState) addConsumer(consumer *consumerState) error {
 		return fmt.Errorf("amqp: consumer %q already exists", consumer.tag)
 	}
 	ch.consumers[consumer.tag] = consumer
-	ch.channel.Consumers[consumer.tag] = &core.ConsumerSubscription{
+	ch.channel.Consumers[consumer.tag] = &broker.ConsumerSubscription{
 		Tag:     consumer.tag,
 		Queue:   consumer.queueName,
 		Channel: ch.channel,
@@ -135,7 +135,7 @@ func (ch *channelState) stopAllConsumers() {
 		refs = append(refs, ref)
 	}
 	ch.consumers = make(map[string]*consumerState)
-	ch.channel.Consumers = make(map[string]*core.ConsumerSubscription)
+	ch.channel.Consumers = make(map[string]*broker.ConsumerSubscription)
 	ch.inFlight = make(map[uint64]deliveryRef)
 	for _, consumer := range consumers {
 		consumer.stopConsuming()

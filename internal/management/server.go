@@ -10,55 +10,40 @@ import (
 	"strings"
 
 	"erionn-mq/internal/amqp"
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
+	"erionn-mq/internal/config"
 )
-
-const DefaultAddr = ":15672"
-
-type Role string
-
-const (
-	RoleAdmin      Role = "admin"
-	RoleMonitoring Role = "monitoring"
-	RoleManagement Role = "management"
-)
-
-type User struct {
-	Username string
-	Password string
-	Role     Role
-}
 
 type Server struct {
 	addr   string
-	broker *core.Broker
+	broker *broker.Broker
 	amqp   *amqp.Server
-	users  map[string]User
+	users  map[string]config.User
 
 	AllowRemote bool
 }
 
 type Config struct {
 	Addr        string
-	Users       []User
+	Users       []config.User
 	AllowRemote bool
 }
 
-func NewServerWithConfig(cfg Config, broker *core.Broker, amqpServer *amqp.Server) *Server {
+func NewServerWithConfig(cfg Config, b *broker.Broker, amqpServer *amqp.Server) *Server {
 	addr := cfg.Addr
 	if addr == "" {
-		addr = DefaultAddr
+		addr = config.DefaultManagementAddr
 	}
-	if broker == nil {
-		broker = core.NewBroker(nil)
+	if b == nil {
+		b = broker.NewBroker(nil)
 	}
 	users := cfg.Users
 	if len(users) == 0 {
-		users = DefaultUsers()
+		users = config.DefaultUsers()
 	}
 	return &Server{
 		addr:        addr,
-		broker:      broker,
+		broker:      b,
 		amqp:        amqpServer,
 		users:       mapUsers(users),
 		AllowRemote: cfg.AllowRemote,
@@ -71,30 +56,30 @@ func (s *Server) ListenAndServe() error {
 
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/overview", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/overview", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return newOverviewResponse(snap)
 	}))
-	mux.HandleFunc("/api/connections", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/connections", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return snap.Connections
 	}))
-	mux.HandleFunc("/api/channels", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/channels", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return snap.Channels
 	}))
-	mux.HandleFunc("/api/exchanges", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/exchanges", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return snap.Broker.Exchanges
 	}))
-	mux.HandleFunc("/api/queues", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/queues", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return snap.Broker.Queues
 	}))
-	mux.HandleFunc("/api/bindings", s.handleRead(RoleMonitoring, func(snap amqp.Snapshot) any {
+	mux.HandleFunc("/api/bindings", s.handleRead(config.RoleMonitoring, func(snap amqp.Snapshot) any {
 		return snap.Broker.Bindings
 	}))
-	mux.HandleFunc("/api/exchanges/", s.withAuth(RoleManagement, s.handleExchangeDeclare))
-	mux.HandleFunc("/api/queues/", s.withAuth(RoleManagement, s.handleQueueMutations))
+	mux.HandleFunc("/api/exchanges/", s.withAuth(config.RoleManagement, s.handleExchangeDeclare))
+	mux.HandleFunc("/api/queues/", s.withAuth(config.RoleManagement, s.handleQueueMutations))
 	return mux
 }
 
-func (s *Server) handleRead(minRole Role, view func(amqp.Snapshot) any) http.HandlerFunc {
+func (s *Server) handleRead(minRole config.Role, view func(amqp.Snapshot) any) http.HandlerFunc {
 	return s.withAuth(minRole, func(w http.ResponseWriter, r *http.Request) {
 		if !requireMethod(w, r, http.MethodGet) {
 			return
@@ -103,7 +88,7 @@ func (s *Server) handleRead(minRole Role, view func(amqp.Snapshot) any) http.Han
 	})
 }
 
-func (s *Server) withAuth(minRole Role, handler func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
+func (s *Server) withAuth(minRole config.Role, handler func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.AllowRemote && !isLocalhost(r.RemoteAddr) {
 			http.Error(w, "forbidden", http.StatusForbidden)
@@ -123,29 +108,29 @@ func (s *Server) withAuth(minRole Role, handler func(http.ResponseWriter, *http.
 	}
 }
 
-func (s *Server) authenticate(r *http.Request) (User, error) {
+func (s *Server) authenticate(r *http.Request) (config.User, error) {
 	username, password, ok := r.BasicAuth()
 	if !ok {
-		return User{}, errors.New("missing auth")
+		return config.User{}, errors.New("missing auth")
 	}
 	user, ok := s.users[username]
 	if !ok || user.Password != password {
-		return User{}, errors.New("invalid credentials")
+		return config.User{}, errors.New("invalid credentials")
 	}
 	return user, nil
 }
 
-func roleAllows(userRole Role, minRole Role, method string) bool {
-	if userRole == RoleAdmin {
+func roleAllows(userRole config.Role, minRole config.Role, method string) bool {
+	if userRole == config.RoleAdmin {
 		return true
 	}
 	if method == http.MethodGet {
-		if minRole == RoleManagement {
-			return userRole == RoleManagement
+		if minRole == config.RoleManagement {
+			return userRole == config.RoleManagement
 		}
-		return userRole == RoleMonitoring || userRole == RoleManagement
+		return userRole == config.RoleMonitoring || userRole == config.RoleManagement
 	}
-	return userRole == RoleManagement
+	return userRole == config.RoleManagement
 }
 
 func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +149,7 @@ func (s *Server) handleExchangeDeclare(w http.ResponseWriter, r *http.Request) {
 	if req.Type == "" {
 		req.Type = "direct"
 	}
-	kind, err := core.ParseExchangeType(req.Type)
+	kind, err := broker.ParseExchangeType(req.Type)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -208,7 +193,7 @@ type overviewResponse struct {
 	ManagementVersion string            `json:"management_version"`
 	Node              string            `json:"node"`
 	ObjectTotals      objectTotals      `json:"object_totals"`
-	MessageStats      core.MessageStats `json:"message_stats"`
+	MessageStats      broker.MessageStats `json:"message_stats"`
 }
 
 type objectTotals struct {
@@ -225,10 +210,6 @@ type exchangeDeclareRequest struct {
 	AutoDelete bool           `json:"auto_delete"`
 	Internal   bool           `json:"internal"`
 	Arguments  map[string]any `json:"arguments"`
-}
-
-func DefaultUsers() []User {
-	return []User{{Username: "guest", Password: "guest", Role: RoleAdmin}}
 }
 
 func newOverviewResponse(snap amqp.Snapshot) overviewResponse {
@@ -324,8 +305,8 @@ func isLocalhost(remoteAddr string) bool {
 	return ip.IsLoopback()
 }
 
-func mapUsers(users []User) map[string]User {
-	mapped := make(map[string]User, len(users))
+func mapUsers(users []config.User) map[string]config.User {
+	mapped := make(map[string]config.User, len(users))
 	for _, user := range users {
 		mapped[user.Username] = user
 	}

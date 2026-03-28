@@ -17,7 +17,6 @@ const (
 	FrameHeartbeat byte = 8
 	FrameEnd       byte = 0xCE
 
-	DefaultAddr     = ":5672"
 	defaultFrameMax = 131072
 	defaultLocale   = "en_US"
 )

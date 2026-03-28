@@ -1,37 +1,37 @@
-package core_test
+package broker_test
 
 import (
 	"path/filepath"
 	"testing"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 	"erionn-mq/internal/store"
 )
 
 func TestDurableBroker_RestoresDurableTopologyAndMessages(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "broker")
 
-	broker, err := core.NewDurableBroker(dataDir)
+	br, err := broker.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := broker.DeclareExchange("orders", core.ExchangeDirect, true, false, false); err != nil {
+	if _, err := br.DeclareExchange("orders", broker.ExchangeDirect, true, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := broker.DeclareQueue("jobs", true, false, false, nil); err != nil {
+	if _, err := br.DeclareQueue("jobs", true, false, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.BindQueue("orders", "jobs", "jobs.created", nil); err != nil {
+	if err := br.BindQueue("orders", "jobs", "jobs.created", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.Publish("orders", "jobs.created", store.Message{Body: []byte("hello")}); err != nil {
+	if err := br.Publish("orders", "jobs.created", store.Message{Body: []byte("hello")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.Close(); err != nil {
+	if err := br.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := core.NewDurableBroker(dataDir)
+	reopened, err := broker.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,28 +70,28 @@ func TestDurableBroker_RestoresDurableTopologyAndMessages(t *testing.T) {
 func TestDurableBroker_DeleteQueueRemovesPersistedState(t *testing.T) {
 	dataDir := filepath.Join(t.TempDir(), "broker")
 
-	broker, err := core.NewDurableBroker(dataDir)
+	br, err := broker.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := broker.DeclareQueue("jobs", true, false, false, nil); err != nil {
+	if _, err := br.DeclareQueue("jobs", true, false, false, nil); err != nil {
 		t.Fatal(err)
 	}
-	queue, err := broker.GetQueue("jobs")
+	queue, err := br.GetQueue("jobs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := queue.Enqueue(store.Message{Body: []byte("hello")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.DeleteQueue("jobs"); err != nil {
+	if err := br.DeleteQueue("jobs"); err != nil {
 		t.Fatal(err)
 	}
-	if err := broker.Close(); err != nil {
+	if err := br.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	reopened, err := core.NewDurableBroker(dataDir)
+	reopened, err := broker.NewDurableBroker(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,15 +7,15 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 	"erionn-mq/internal/store"
 )
 
 type serverConn struct {
 	server   *Server
-	broker   *core.Broker
+	broker   *broker.Broker
 	netConn  net.Conn
-	amqpConn *core.Connection
+	amqpConn *broker.Connection
 
 	writeMu  sync.Mutex
 	mu       sync.Mutex

@@ -3,14 +3,14 @@ package amqp
 import (
 	"testing"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 	"erionn-mq/internal/store"
 )
 
 func newTestChannelState() *channelState {
 	return &channelState{
-		broker:          core.NewBroker(func() store.MessageStore { return store.NewMemoryMessageStore() }),
-		channel:         &core.Channel{Consumers: make(map[string]*core.ConsumerSubscription)},
+		broker:          broker.NewBroker(func() store.MessageStore { return store.NewMemoryMessageStore() }),
+		channel:         &broker.Channel{Consumers: make(map[string]*broker.ConsumerSubscription)},
 		inFlight:        make(map[uint64]deliveryRef),
 		consumers:       make(map[string]*consumerState),
 		nextDeliveryTag: 1,

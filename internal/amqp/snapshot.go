@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 )
 
 type Snapshot struct {
 	GeneratedAt time.Time           `json:"generated_at"`
-	Broker      core.BrokerSnapshot `json:"broker"`
+	Broker      broker.BrokerSnapshot `json:"broker"`
 	Connections []ConnectionView    `json:"connections"`
 	Channels    []ChannelView       `json:"channels"`
 }
