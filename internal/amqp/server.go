@@ -7,7 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
+	"erionn-mq/internal/config"
 	"erionn-mq/internal/store"
 )
 
@@ -15,7 +16,7 @@ var errConnectionClosed = errors.New("amqp: connection closed")
 
 type Server struct {
 	Addr   string
-	broker *core.Broker
+	broker *broker.Broker
 
 	nextConnID     atomic.Uint64
 	nextQueueID    atomic.Uint64
@@ -25,18 +26,18 @@ type Server struct {
 	connections map[uint64]*serverConn
 }
 
-func NewServer(addr string, broker *core.Broker) *Server {
+func NewServer(addr string, b *broker.Broker) *Server {
 	if addr == "" {
-		addr = DefaultAddr
+		addr = config.DefaultAMQPAddr
 	}
-	if broker == nil {
-		broker = core.NewBroker(func() store.MessageStore {
+	if b == nil {
+		b = broker.NewBroker(func() store.MessageStore {
 			return store.NewMemoryMessageStore()
 		})
 	}
 	return &Server{
 		Addr:        addr,
-		broker:      broker,
+		broker:      b,
 		connections: make(map[uint64]*serverConn),
 	}
 }
@@ -78,7 +79,7 @@ func (s *Server) newConn(netConn net.Conn) *serverConn {
 		server:  s,
 		broker:  s.broker,
 		netConn: netConn,
-		amqpConn: &core.Connection{
+		amqpConn: &broker.Connection{
 			ID:   id,
 			Conn: netConn,
 		},

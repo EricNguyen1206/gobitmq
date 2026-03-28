@@ -1,16 +1,16 @@
-package core_test
+package broker_test
 
 import (
 	"fmt"
 	"testing"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 	"erionn-mq/internal/store"
 )
 
 // helper: build a broker, declare queues, create bindings for a test scenario.
-func newBroker() *core.Broker {
-	return core.NewBroker(func() store.MessageStore {
+func newBroker() *broker.Broker {
+	return broker.NewBroker(func() store.MessageStore {
 		return store.NewMemoryMessageStore()
 	})
 }
@@ -226,10 +226,10 @@ func TestBroker_DeclareQueue_AutoBindsDefaultExchange(t *testing.T) {
 
 func TestBroker_DeclareExchange_RedeclareMismatchErrors(t *testing.T) {
 	b := newBroker()
-	if _, err := b.DeclareExchange("logs", core.ExchangeDirect, false, false, false); err != nil {
+	if _, err := b.DeclareExchange("logs", broker.ExchangeDirect, false, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.DeclareExchange("logs", core.ExchangeTopic, false, false, false); err == nil {
+	if _, err := b.DeclareExchange("logs", broker.ExchangeTopic, false, false, false); err == nil {
 		t.Fatal("expected redeclare mismatch error, got nil")
 	}
 }

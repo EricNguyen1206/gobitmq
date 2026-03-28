@@ -3,7 +3,7 @@ package amqp
 import (
 	"fmt"
 
-	"erionn-mq/internal/core"
+	"erionn-mq/internal/broker"
 )
 
 func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) error {
@@ -11,7 +11,7 @@ func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) er
 		return err
 	}
 
-	kind, err := core.ParseExchangeType(m.Type)
+	kind, err := broker.ParseExchangeType(m.Type)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (c *serverConn) handleQueueDeclare(channel uint16, m QueueDeclare) error {
 		queueName = fmt.Sprintf("amq.gen-%d", c.server.nextQueueID.Add(1))
 	}
 
-	var q *core.Queue
+	var q *broker.Queue
 	var err error
 	if m.Passive {
 		q, err = c.broker.GetQueue(queueName)

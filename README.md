@@ -1,6 +1,6 @@
 # Message Queue (MQ) project using Go
 
-EriOnn-MQ is a lightweight, high-performance Message Broker written in Go, implementing the **AMQP 0-9-1** protocol. It provides a reliable and scalable messaging foundation with a focus on ease of deployment and professional management tools.
+This project is a lightweight, high-performance Message Broker written in Go, implementing the **AMQP 0-9-1** protocol. It provides a reliable and scalable messaging foundation with a focus on ease of deployment and professional management tools.
 
 ## Scope
 
@@ -26,7 +26,7 @@ graph LR
         AMQP[AMQP Server<br>Port: 5672]
         HTTP[Management API<br>Port: 15672]
         
-        subgraph Core[Domain Core Broker]
+        subgraph Broker[Broker Engine]
             EX(Exchange)
             Q(Queue)
         end
@@ -42,9 +42,9 @@ graph LR
     AMQP -- BasicDeliver --> C
 
     A -- REST HTTP --> HTTP
-    HTTP -. GetSnapshot .-> Core
+    HTTP -. GetSnapshot .-> Broker
 
-    Core <--> Store
+    Broker <--> Store
     Store --> Disk
 
     classDef ext fill:#eff6ff,stroke:#3b82f6,color:#1e40af,stroke-width:2px;
@@ -68,11 +68,11 @@ graph LR
 erionn-mq/
 ├── cmd/                # Entrypoint, initializes the system and connects components.
 ├── internal/
-│   ├── amqp/           # AMQP 0-9-1 protocol handling (Server implementation, frame encoding/decoding, method handling).
-│   ├── core/           # Core business logic (Broker coordinator, Exchange routing, Queue management, Bindings).
-│   ├── store/          # Data storage layer (Memory-based store, Gob snapshot for durability).
-│   ├── config/         # System configuration management (Settings, ENV, Defaults).
-│   └── management/     # HTTP Management API & Dashboard (Admin UI, Monitoring endpoints).
+│   ├── broker/         # Message broker engine (Broker, Exchange routing, Queue management, Bindings, Persistence).
+│   ├── amqp/           # AMQP 0-9-1 protocol handling (Server, frame encoding/decoding, method dispatch).
+│   ├── store/          # Message storage layer (Interface, In-memory store, Gob-based durable store).
+│   ├── config/         # System configuration, auth types, and defaults (Settings, ENV, User/Role).
+│   └── management/     # HTTP Management API (REST endpoints, Basic Auth, RBAC).
 └── go.mod              # Module declaration and dependency management.
 ```
 

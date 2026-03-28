@@ -5,9 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"erionn-mq/internal/amqp"
-	"erionn-mq/internal/management"
 )
 
 const (
@@ -16,22 +13,43 @@ const (
 	envDataDir         = "ERIONN_DATA_DIR"
 	envManagementUsers = "ERIONN_MGMT_USERS"
 	envManagementAllow = "ERIONN_MGMT_ALLOW_REMOTE"
+
+	DefaultAMQPAddr       = ":5672"
+	DefaultManagementAddr = ":15672"
 )
+
+type Role string
+
+const (
+	RoleAdmin      Role = "admin"
+	RoleMonitoring Role = "monitoring"
+	RoleManagement Role = "management"
+)
+
+type User struct {
+	Username string
+	Password string
+	Role     Role
+}
+
+func DefaultUsers() []User {
+	return []User{{Username: "guest", Password: "guest", Role: RoleAdmin}}
+}
 
 type Config struct {
 	AMQPAddr              string
 	ManagementAddr        string
 	DataDir               string
 	ManagementAllowRemote bool
-	ManagementUsers       []management.User
+	ManagementUsers       []User
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		AMQPAddr:        envOr(envAMQPAddr, amqp.DefaultAddr),
-		ManagementAddr:  envOr(envManagementAddr, management.DefaultAddr),
+		AMQPAddr:        envOr(envAMQPAddr, DefaultAMQPAddr),
+		ManagementAddr:  envOr(envManagementAddr, DefaultManagementAddr),
 		DataDir:         envOr(envDataDir, filepath.Join("data", "broker")),
-		ManagementUsers: management.DefaultUsers(),
+		ManagementUsers: DefaultUsers(),
 	}
 
 	if value := strings.TrimSpace(os.Getenv(envManagementAllow)); value != "" {
@@ -60,9 +78,9 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func parseUsers(raw string) ([]management.User, error) {
+func parseUsers(raw string) ([]User, error) {
 	chunks := strings.Split(raw, ",")
-	users := make([]management.User, 0, len(chunks))
+	users := make([]User, 0, len(chunks))
 	for _, chunk := range chunks {
 		entry := strings.TrimSpace(chunk)
 		if entry == "" {
@@ -77,7 +95,7 @@ func parseUsers(raw string) ([]management.User, error) {
 		if username == "" || password == "" {
 			return nil, fmt.Errorf("config: invalid user entry %q", entry)
 		}
-		role := management.RoleAdmin
+		role := RoleAdmin
 		if len(parts) == 3 {
 			var err error
 			role, err = parseRole(parts[2])
@@ -85,7 +103,7 @@ func parseUsers(raw string) ([]management.User, error) {
 				return nil, err
 			}
 		}
-		users = append(users, management.User{Username: username, Password: password, Role: role})
+		users = append(users, User{Username: username, Password: password, Role: role})
 	}
 	if len(users) == 0 {
 		return nil, fmt.Errorf("config: no valid users found")
@@ -93,14 +111,14 @@ func parseUsers(raw string) ([]management.User, error) {
 	return users, nil
 }
 
-func parseRole(value string) (management.Role, error) {
+func parseRole(value string) (Role, error) {
 	role := strings.ToLower(strings.TrimSpace(value))
 	if role == "" {
-		return management.RoleAdmin, nil
+		return RoleAdmin, nil
 	}
-	switch management.Role(role) {
-	case management.RoleAdmin, management.RoleMonitoring, management.RoleManagement:
-		return management.Role(role), nil
+	switch Role(role) {
+	case RoleAdmin, RoleMonitoring, RoleManagement:
+		return Role(role), nil
 	default:
 		return "", fmt.Errorf("config: unsupported management role %q", value)
 	}
