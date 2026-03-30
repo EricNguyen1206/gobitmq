@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="EriOnn-MQ logo" width="320" />
+</p>
+
 # Message Queue (MQ) project using Go
 
 This project is a lightweight, high-performance Message Broker written in Go, implementing the **AMQP 0-9-1** protocol. It provides a reliable and scalable messaging foundation with a focus on ease of deployment and professional management tools.
