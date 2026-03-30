@@ -6,7 +6,7 @@ import (
 	"erionn-mq/internal/broker"
 )
 
-func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) error {
+func (c *serverConn) handleExchDeclareRequest(channel uint16, m ExchDeclareRequest) error {
 	if _, err := c.requireChannel(channel); err != nil {
 		return err
 	}
@@ -29,10 +29,10 @@ func (c *serverConn) handleExchangeDeclare(channel uint16, m ExchangeDeclare) er
 	if m.NoWait {
 		return nil
 	}
-	return c.sendMethod(channel, ExchangeDeclareOk{})
+	return c.sendMethod(channel, ExchDeclareResponse{})
 }
 
-func (c *serverConn) handleQueueDeclare(channel uint16, m QueueDeclare) error {
+func (c *serverConn) handleQueueDeclareRequest(channel uint16, m QueueDeclareRequest) error {
 	if _, err := c.requireChannel(channel); err != nil {
 		return err
 	}
@@ -57,14 +57,14 @@ func (c *serverConn) handleQueueDeclare(channel uint16, m QueueDeclare) error {
 		return nil
 	}
 
-	return c.sendMethod(channel, QueueDeclareOk{
+	return c.sendMethod(channel, QueueDeclareResponse{
 		Queue:         q.Name,
 		MessageCount:  uint32(q.Len()),
 		ConsumerCount: c.server.consumerCount(q.Name),
 	})
 }
 
-func (c *serverConn) handleQueueBind(channel uint16, m QueueBind) error {
+func (c *serverConn) handleQueueBindRequest(channel uint16, m QueueBindRequest) error {
 	if _, err := c.requireChannel(channel); err != nil {
 		return err
 	}
@@ -77,5 +77,5 @@ func (c *serverConn) handleQueueBind(channel uint16, m QueueBind) error {
 	if m.NoWait {
 		return nil
 	}
-	return c.sendMethod(channel, QueueBindOk{})
+	return c.sendMethod(channel, QueueBindResponse{})
 }

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func (c *serverConn) handleBasicConsume(channel uint16, m BasicConsume) error {
+func (c *serverConn) handleBasicConsumeRequest(channel uint16, m BasicConsumeRequest) error {
 	ch, err := c.requireChannel(channel)
 	if err != nil {
 		return err
@@ -26,7 +26,7 @@ func (c *serverConn) handleBasicConsume(channel uint16, m BasicConsume) error {
 		stop:      make(chan struct{}),
 	}
 
-	if err := ch.addConsumer(consumer); err != nil {
+	if err := ch.addConsumerToChannel(consumer); err != nil {
 		return err
 	}
 
@@ -35,16 +35,16 @@ func (c *serverConn) handleBasicConsume(channel uint16, m BasicConsume) error {
 	if m.NoWait {
 		return nil
 	}
-	return c.sendMethod(channel, BasicConsumeOk{ConsumerTag: tag})
+	return c.sendMethod(channel, BasicConsumeResponse{ConsumerTag: tag})
 }
 
-func (c *serverConn) handleBasicCancel(channel uint16, m BasicCancel) error {
+func (c *serverConn) handleBasicCancelRequest(channel uint16, m BasicCancelRequest) error {
 	ch, err := c.requireChannel(channel)
 	if err != nil {
 		return err
 	}
 
-	consumer, ok := ch.removeConsumer(m.ConsumerTag)
+	consumer, ok := ch.removeConsumerFromChannel(m.ConsumerTag)
 	if !ok {
 		return fmt.Errorf("amqp: consumer %q not found", m.ConsumerTag)
 	}
@@ -53,10 +53,10 @@ func (c *serverConn) handleBasicCancel(channel uint16, m BasicCancel) error {
 	if m.NoWait {
 		return nil
 	}
-	return c.sendMethod(channel, BasicCancelOk{ConsumerTag: m.ConsumerTag})
+	return c.sendMethod(channel, BasicCancelResponse{ConsumerTag: m.ConsumerTag})
 }
 
-func (c *serverConn) handleBasicQos(channel uint16, m BasicQos) error {
+func (c *serverConn) handleBasicQosRequest(channel uint16, m BasicQosRequest) error {
 	ch, err := c.requireChannel(channel)
 	if err != nil {
 		return err
@@ -70,7 +70,7 @@ func (c *serverConn) handleBasicQos(channel uint16, m BasicQos) error {
 	}
 	ch.mu.Unlock()
 
-	return c.sendMethod(channel, BasicQosOk{})
+	return c.sendMethod(channel, BasicQosResponse{})
 }
 
 func (c *serverConn) consumeLoop(channelID uint16, ch *channelState, consumer *consumerState) {

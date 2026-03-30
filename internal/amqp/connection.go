@@ -84,8 +84,8 @@ func (c *serverConn) close() {
 	c.server.mu.Unlock()
 }
 
-func (c *serverConn) startMethod() ConnectionStart {
-	return ConnectionStart{
+func (c *serverConn) startMethod() ConnStartRequest {
+	return ConnStartRequest{
 		VersionMajor: 0,
 		VersionMinor: 9,
 		ServerProperties: Table{
@@ -107,51 +107,51 @@ func (c *serverConn) startMethod() ConnectionStart {
 	}
 }
 
-func (c *serverConn) handleMethod(channel uint16, method Method) error {
+func (c *serverConn) handleMethod(channel uint16, method AMQPMethod) error {
 	switch m := method.(type) {
-	case ConnectionStartOk:
-		return c.handleConnectionStartOk(m)
-	case ConnectionTuneOk:
-		return c.handleConnectionTuneOk(m)
-	case ConnectionOpen:
-		return c.handleConnectionOpen(m)
-	case ConnectionClose:
-		if err := c.sendMethod(0, ConnectionCloseOk{}); err != nil {
+	case ConnStartResponse:
+		return c.handleConnStartResponse(m)
+	case ConnTuneResponse:
+		return c.handleConnTuneResponse(m)
+	case ConnOpenRequest:
+		return c.handleConnOpenRequest(m)
+	case ConnCloseRequest:
+		if err := c.sendMethod(0, ConnCloseResponse{}); err != nil {
 			return err
 		}
 		return errConnectionClosed
-	case ChannelOpen:
-		return c.handleChannelOpen(channel)
-	case ChannelClose:
-		return c.handleChannelClose(channel)
-	case ExchangeDeclare:
-		return c.handleExchangeDeclare(channel, m)
-	case QueueDeclare:
-		return c.handleQueueDeclare(channel, m)
-	case QueueBind:
-		return c.handleQueueBind(channel, m)
+	case ChanOpenRequest:
+		return c.handleChanOpenRequest(channel)
+	case ChanCloseRequest:
+		return c.handleChanCloseRequest(channel)
+	case ExchDeclareRequest:
+		return c.handleExchDeclareRequest(channel, m)
+	case QueueDeclareRequest:
+		return c.handleQueueDeclareRequest(channel, m)
+	case QueueBindRequest:
+		return c.handleQueueBindRequest(channel, m)
 	case BasicPublish:
 		return c.handleBasicPublish(channel, m)
-	case BasicQos:
-		return c.handleBasicQos(channel, m)
-	case BasicConsume:
-		return c.handleBasicConsume(channel, m)
-	case BasicCancel:
-		return c.handleBasicCancel(channel, m)
+	case BasicQosRequest:
+		return c.handleBasicQosRequest(channel, m)
+	case BasicConsumeRequest:
+		return c.handleBasicConsumeRequest(channel, m)
+	case BasicCancelRequest:
+		return c.handleBasicCancelRequest(channel, m)
 	case BasicAck:
 		return c.handleBasicAck(channel, m)
 	case BasicNack:
 		return c.handleBasicNack(channel, m)
 	case BasicReject:
 		return c.handleBasicReject(channel, m)
-	case ConfirmSelect:
-		return c.handleConfirmSelect(channel, m)
+	case ConfirmSelectRequest:
+		return c.handleConfirmSelectRequest(channel, m)
 	default:
 		return fmt.Errorf("amqp: unsupported runtime method %T", method)
 	}
 }
 
-func (c *serverConn) handleConnectionStartOk(m ConnectionStartOk) error {
+func (c *serverConn) handleConnStartResponse(m ConnStartResponse) error {
 	if strings.ToUpper(m.Mechanism) != "PLAIN" {
 		return fmt.Errorf("amqp: unsupported auth mechanism %q", m.Mechanism)
 	}
@@ -159,26 +159,26 @@ func (c *serverConn) handleConnectionStartOk(m ConnectionStartOk) error {
 		return fmt.Errorf("amqp: invalid PLAIN auth response")
 	}
 
-	return c.sendMethod(0, ConnectionTune{
+	return c.sendMethod(0, ConnTuneRequest{
 		ChannelMax: 0,
 		FrameMax:   defaultFrameMax,
 		Heartbeat:  0,
 	})
 }
 
-func (c *serverConn) handleConnectionTuneOk(m ConnectionTuneOk) error {
+func (c *serverConn) handleConnTuneResponse(m ConnTuneResponse) error {
 	if m.FrameMax != 0 {
 		c.frameMax = m.FrameMax
 	}
 	return nil
 }
 
-func (c *serverConn) handleConnectionOpen(m ConnectionOpen) error {
+func (c *serverConn) handleConnOpenRequest(m ConnOpenRequest) error {
 	c.amqpConn.VHost = m.VirtualHost
-	return c.sendMethod(0, ConnectionOpenOk{})
+	return c.sendMethod(0, ConnOpenResponse{})
 }
 
-func (c *serverConn) sendMethod(channel uint16, method Method) error {
+func (c *serverConn) sendMethod(channel uint16, method AMQPMethod) error {
 	frame, err := EncodeMethodFrame(channel, method)
 	if err != nil {
 		return err
