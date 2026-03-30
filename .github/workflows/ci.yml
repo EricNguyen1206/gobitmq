@@ -52,7 +52,7 @@ jobs:
           node-version: "22"
 
       - name: Build broker binary
-        run: go build -o /tmp/erionn-mq ./cmd
+        run: go build -o /tmp/gobitmq ./cmd
 
       - name: Install Node.js dependencies
         working-directory: test/integration
@@ -61,7 +61,7 @@ jobs:
       - name: amqplib smoke test
         working-directory: test/integration
         run: |
-          /tmp/erionn-mq &
+          /tmp/gobitmq &
           sleep 2
           node amqplib-smoke.mjs
           kill %1 2>/dev/null || true
@@ -82,4 +82,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker image
-        run: docker build -t erionn-mq .
+        run: docker build -t gobitmq .

@@ -112,7 +112,7 @@ func (ch *channelState) takeRefs(deliveryTag uint64, multiple bool) ([]deliveryR
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
-	if multiple {
+	if multiple { // batch delivery
 		refs := make([]deliveryRef, 0)
 		for tag, ref := range ch.inFlight {
 			if deliveryTag == 0 || tag <= deliveryTag {
