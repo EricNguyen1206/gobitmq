@@ -52,7 +52,7 @@ func (c *serverConn) handleBasicPublish(channel uint16, m BasicPublish) error {
 	return nil
 }
 
-func (c *serverConn) handleConfirmSelect(channel uint16, m ConfirmSelect) error {
+func (c *serverConn) handleConfirmSelectRequest(channel uint16, m ConfirmSelectRequest) error {
 	ch, err := c.requireChannel(channel)
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func (c *serverConn) handleConfirmSelect(channel uint16, m ConfirmSelect) error 
 	if m.NoWait {
 		return nil
 	}
-	return c.sendMethod(channel, ConfirmSelectOk{})
+	return c.sendMethod(channel, ConfirmSelectResponse{})
 }
 
 func (c *serverConn) nextConfirmSeq(channel uint16) uint64 {

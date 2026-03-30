@@ -60,7 +60,7 @@ func (c *serverConn) removeChannel(id uint16) (*channelState, error) {
 	return ch, nil
 }
 
-func (c *serverConn) handleChannelOpen(id uint16) error {
+func (c *serverConn) handleChanOpenRequest(id uint16) error {
 	if id == 0 {
 		return fmt.Errorf("amqp: channel 0 is reserved for connection methods")
 	}
@@ -82,19 +82,19 @@ func (c *serverConn) handleChannelOpen(id uint16) error {
 	}
 	c.mu.Unlock()
 
-	return c.sendMethod(id, ChannelOpenOk{})
+	return c.sendMethod(id, ChanOpenResponse{})
 }
 
-func (c *serverConn) handleChannelClose(id uint16) error {
+func (c *serverConn) handleChanCloseRequest(id uint16) error {
 	ch, err := c.removeChannel(id)
 	if err != nil {
 		return err
 	}
 	ch.stopAllConsumers()
-	return c.sendMethod(id, ChannelCloseOk{})
+	return c.sendMethod(id, ChanCloseResponse{})
 }
 
-func (ch *channelState) addConsumer(consumer *consumerState) error {
+func (ch *channelState) addConsumerToChannel(consumer *consumerState) error {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -111,7 +111,7 @@ func (ch *channelState) addConsumer(consumer *consumerState) error {
 	return nil
 }
 
-func (ch *channelState) removeConsumer(tag string) (*consumerState, bool) {
+func (ch *channelState) removeConsumerFromChannel(tag string) (*consumerState, bool) {
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
@@ -130,6 +130,7 @@ func (ch *channelState) stopAllConsumers() {
 	for _, consumer := range ch.consumers {
 		consumers = append(consumers, consumer)
 	}
+	// Copy inFlight messages to prevent race condition when stopping consumers
 	refs := make([]deliveryRef, 0, len(ch.inFlight))
 	for _, ref := range ch.inFlight {
 		refs = append(refs, ref)
@@ -138,10 +139,10 @@ func (ch *channelState) stopAllConsumers() {
 	ch.channel.Consumers = make(map[string]*broker.ConsumerSubscription)
 	ch.inFlight = make(map[uint64]deliveryRef)
 	for _, consumer := range consumers {
-		consumer.stopConsuming()
+		consumer.stopConsuming() // close channel 'stop' to exit consumeLoop
 	}
 	ch.mu.Unlock()
-
+	// Nack requeue all in-flight messages
 	for _, ref := range refs {
 		q, err := ch.broker.GetQueue(ref.queueName)
 		if err != nil {

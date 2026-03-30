@@ -32,9 +32,9 @@ func TestServer_EndToEndPublishConsumeAck(t *testing.T) {
 	}
 
 	client.sendMethod(t, 1, BasicAck{DeliveryTag: deliver.DeliveryTag})
-	client.sendMethod(t, 1, BasicCancel{ConsumerTag: consumerTag})
-	if _, ok := client.readMethod(t).(BasicCancelOk); !ok {
-		t.Fatal("expected BasicCancelOk")
+	client.sendMethod(t, 1, BasicCancelRequest{ConsumerTag: consumerTag})
+	if _, ok := client.readMethod(t).(BasicCancelResponse); !ok {
+		t.Fatal("expected BasicCancelResponse")
 	}
 
 	client.closeChannelAndConnection(t, 1)
@@ -42,9 +42,9 @@ func TestServer_EndToEndPublishConsumeAck(t *testing.T) {
 
 func TestServer_PublisherConfirms_AckOnPublish(t *testing.T) {
 	client := newTestClient(t)
-	client.sendMethod(t, 1, ConfirmSelect{})
-	if _, ok := client.readMethod(t).(ConfirmSelectOk); !ok {
-		t.Fatal("expected ConfirmSelectOk")
+	client.sendMethod(t, 1, ConfirmSelectRequest{})
+	if _, ok := client.readMethod(t).(ConfirmSelectResponse); !ok {
+		t.Fatal("expected ConfirmSelectResponse")
 	}
 
 	client.publish(t, 1, "test-ex", "test-key", BasicProperties{}, []byte("hello"))
@@ -128,9 +128,9 @@ func TestServer_BasicReject_DeadLetters(t *testing.T) {
 
 func TestServer_BasicQos_BlocksUntilAck(t *testing.T) {
 	client := newTestClient(t)
-	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1})
-	if _, ok := client.readMethod(t).(BasicQosOk); !ok {
-		t.Fatal("expected BasicQosOk")
+	client.sendMethod(t, 1, BasicQosRequest{PrefetchCount: 1})
+	if _, ok := client.readMethod(t).(BasicQosResponse); !ok {
+		t.Fatal("expected BasicQosResponse")
 	}
 
 	consumerTag := client.consume(t, 1, "test-q")
@@ -159,9 +159,9 @@ func TestServer_BasicQos_BlocksUntilAck(t *testing.T) {
 	}
 
 	client.sendMethod(t, 1, BasicAck{DeliveryTag: second.DeliveryTag})
-	client.sendMethod(t, 1, BasicCancel{ConsumerTag: consumerTag})
-	if _, ok := client.readMethod(t).(BasicCancelOk); !ok {
-		t.Fatal("expected BasicCancelOk")
+	client.sendMethod(t, 1, BasicCancelRequest{ConsumerTag: consumerTag})
+	if _, ok := client.readMethod(t).(BasicCancelResponse); !ok {
+		t.Fatal("expected BasicCancelResponse")
 	}
 
 	client.closeChannelAndConnection(t, 1)
@@ -169,9 +169,9 @@ func TestServer_BasicQos_BlocksUntilAck(t *testing.T) {
 
 func TestServer_BasicQos_GlobalFalseAppliesPerConsumer(t *testing.T) {
 	client := newTestClient(t)
-	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1, Global: false})
-	if _, ok := client.readMethod(t).(BasicQosOk); !ok {
-		t.Fatal("expected BasicQosOk")
+	client.sendMethod(t, 1, BasicQosRequest{PrefetchCount: 1, Global: false})
+	if _, ok := client.readMethod(t).(BasicQosResponse); !ok {
+		t.Fatal("expected BasicQosResponse")
 	}
 
 	client.declareQueue(t, 1, "alt-q", nil)
@@ -209,9 +209,9 @@ func TestServer_BasicQos_GlobalFalseAppliesPerConsumer(t *testing.T) {
 
 func TestServer_BasicQos_GlobalTrueLimitsWholeChannel(t *testing.T) {
 	client := newTestClient(t)
-	client.sendMethod(t, 1, BasicQos{PrefetchCount: 1, Global: true})
-	if _, ok := client.readMethod(t).(BasicQosOk); !ok {
-		t.Fatal("expected BasicQosOk")
+	client.sendMethod(t, 1, BasicQosRequest{PrefetchCount: 1, Global: true})
+	if _, ok := client.readMethod(t).(BasicQosResponse); !ok {
+		t.Fatal("expected BasicQosResponse")
 	}
 
 	client.declareQueue(t, 1, "alt-q", nil)
@@ -321,7 +321,7 @@ func TestServer_HandleChannelClose_RequeuesInFlightMessages(t *testing.T) {
 		},
 	}
 
-	if err := conn.handleChannelClose(1); err != nil {
+	if err := conn.handleChanCloseRequest(1); err != nil {
 		t.Fatal(err)
 	}
 	if q.Len() != 1 {
@@ -474,37 +474,37 @@ func (c *testClient) handshake(t *testing.T) {
 		t.Fatalf("WriteProtocolHeader: %v", err)
 	}
 
-	if _, ok := c.readMethod(t).(ConnectionStart); !ok {
-		t.Fatal("expected ConnectionStart")
+	if _, ok := c.readMethod(t).(ConnStartRequest); !ok {
+		t.Fatal("expected ConnStartRequest")
 	}
 
-	c.sendMethod(t, 0, ConnectionStartOk{
+	c.sendMethod(t, 0, ConnStartResponse{
 		ClientProperties: Table{"product": "amqplib-test"},
 		Mechanism:        "PLAIN",
 		Response:         []byte("\x00guest\x00guest"),
 		Locale:           defaultLocale,
 	})
 
-	tune, ok := c.readMethod(t).(ConnectionTune)
+	tune, ok := c.readMethod(t).(ConnTuneRequest)
 	if !ok {
-		t.Fatal("expected ConnectionTune")
+		t.Fatal("expected ConnTuneRequest")
 	}
-	c.sendMethod(t, 0, ConnectionTuneOk{
+	c.sendMethod(t, 0, ConnTuneResponse{
 		ChannelMax: tune.ChannelMax,
 		FrameMax:   tune.FrameMax,
 		Heartbeat:  tune.Heartbeat,
 	})
-	c.sendMethod(t, 0, ConnectionOpen{VirtualHost: "/"})
-	if _, ok := c.readMethod(t).(ConnectionOpenOk); !ok {
-		t.Fatal("expected ConnectionOpenOk")
+	c.sendMethod(t, 0, ConnOpenRequest{VirtualHost: "/"})
+	if _, ok := c.readMethod(t).(ConnOpenResponse); !ok {
+		t.Fatal("expected ConnOpenResponse")
 	}
 }
 
 func (c *testClient) openChannel(t *testing.T, channel uint16) {
 	t.Helper()
-	c.sendMethod(t, channel, ChannelOpen{})
-	if _, ok := c.readMethod(t).(ChannelOpenOk); !ok {
-		t.Fatal("expected ChannelOpenOk")
+	c.sendMethod(t, channel, ChanOpenRequest{})
+	if _, ok := c.readMethod(t).(ChanOpenResponse); !ok {
+		t.Fatal("expected ChanOpenResponse")
 	}
 }
 
@@ -518,10 +518,10 @@ func (c *testClient) declareTopology(t *testing.T) {
 
 func (c *testClient) consume(t *testing.T, channel uint16, queue string) string {
 	t.Helper()
-	c.sendMethod(t, channel, BasicConsume{Queue: queue})
-	consumeOk, ok := c.readMethod(t).(BasicConsumeOk)
+	c.sendMethod(t, channel, BasicConsumeRequest{Queue: queue})
+	consumeOk, ok := c.readMethod(t).(BasicConsumeResponse)
 	if !ok {
-		t.Fatal("expected BasicConsumeOk")
+		t.Fatal("expected BasicConsumeResponse")
 	}
 	if consumeOk.ConsumerTag == "" {
 		t.Fatal("expected generated consumer tag")
@@ -531,33 +531,33 @@ func (c *testClient) consume(t *testing.T, channel uint16, queue string) string 
 
 func (c *testClient) declareExchange(t *testing.T, channel uint16, exchange, kind string) {
 	t.Helper()
-	c.sendMethod(t, channel, ExchangeDeclare{Exchange: exchange, Type: kind})
-	if _, ok := c.readMethod(t).(ExchangeDeclareOk); !ok {
-		t.Fatal("expected ExchangeDeclareOk")
+	c.sendMethod(t, channel, ExchDeclareRequest{Exchange: exchange, Type: kind})
+	if _, ok := c.readMethod(t).(ExchDeclareResponse); !ok {
+		t.Fatal("expected ExchDeclareResponse")
 	}
 }
 
 func (c *testClient) declareQueue(t *testing.T, channel uint16, queue string, args Table) {
 	t.Helper()
-	c.sendMethod(t, channel, QueueDeclare{Queue: queue, Arguments: args})
-	if _, ok := c.readMethod(t).(QueueDeclareOk); !ok {
-		t.Fatal("expected QueueDeclareOk")
+	c.sendMethod(t, channel, QueueDeclareRequest{Queue: queue, Arguments: args})
+	if _, ok := c.readMethod(t).(QueueDeclareResponse); !ok {
+		t.Fatal("expected QueueDeclareResponse")
 	}
 }
 
 func (c *testClient) bindQueue(t *testing.T, channel uint16, queue, exchange, routingKey string) {
 	t.Helper()
-	c.sendMethod(t, channel, QueueBind{Queue: queue, Exchange: exchange, RoutingKey: routingKey})
-	if _, ok := c.readMethod(t).(QueueBindOk); !ok {
-		t.Fatal("expected QueueBindOk")
+	c.sendMethod(t, channel, QueueBindRequest{Queue: queue, Exchange: exchange, RoutingKey: routingKey})
+	if _, ok := c.readMethod(t).(QueueBindResponse); !ok {
+		t.Fatal("expected QueueBindResponse")
 	}
 }
 
 func (c *testClient) cancelConsumer(t *testing.T, channel uint16, consumerTag string) {
 	t.Helper()
-	c.sendMethod(t, channel, BasicCancel{ConsumerTag: consumerTag})
-	if _, ok := c.readMethod(t).(BasicCancelOk); !ok {
-		t.Fatal("expected BasicCancelOk")
+	c.sendMethod(t, channel, BasicCancelRequest{ConsumerTag: consumerTag})
+	if _, ok := c.readMethod(t).(BasicCancelResponse); !ok {
+		t.Fatal("expected BasicCancelResponse")
 	}
 }
 
@@ -632,18 +632,18 @@ func (c *testClient) expectNoFrame(t *testing.T, timeout time.Duration) {
 func (c *testClient) closeChannelAndConnection(t *testing.T, channel uint16) {
 	t.Helper()
 
-	c.sendMethod(t, channel, ChannelClose{ReplyCode: 200, ReplyText: "bye"})
-	if _, ok := c.readMethod(t).(ChannelCloseOk); !ok {
-		t.Fatal("expected ChannelCloseOk")
+	c.sendMethod(t, channel, ChanCloseRequest{ReplyCode: 200, ReplyText: "bye"})
+	if _, ok := c.readMethod(t).(ChanCloseResponse); !ok {
+		t.Fatal("expected ChanCloseResponse")
 	}
 
-	c.sendMethod(t, 0, ConnectionClose{ReplyCode: 200, ReplyText: "bye"})
-	if _, ok := c.readMethod(t).(ConnectionCloseOk); !ok {
-		t.Fatal("expected ConnectionCloseOk")
+	c.sendMethod(t, 0, ConnCloseRequest{ReplyCode: 200, ReplyText: "bye"})
+	if _, ok := c.readMethod(t).(ConnCloseResponse); !ok {
+		t.Fatal("expected ConnCloseResponse")
 	}
 }
 
-func (c *testClient) sendMethod(t *testing.T, channel uint16, method Method) {
+func (c *testClient) sendMethod(t *testing.T, channel uint16, method AMQPMethod) {
 	t.Helper()
 	frame, err := EncodeMethodFrame(channel, method)
 	if err != nil {
@@ -654,7 +654,7 @@ func (c *testClient) sendMethod(t *testing.T, channel uint16, method Method) {
 	}
 }
 
-func (c *testClient) readMethod(t *testing.T) Method {
+func (c *testClient) readMethod(t *testing.T) AMQPMethod {
 	t.Helper()
 	frame, err := ReadFrame(c.conn, defaultFrameMax)
 	if err != nil {

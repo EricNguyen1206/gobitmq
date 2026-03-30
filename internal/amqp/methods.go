@@ -15,13 +15,55 @@ const (
 	classConfirm    uint16 = 85
 )
 
-type Method interface {
+type AMQPMethod interface {
 	ClassID() uint16
 	MethodID() uint16
 	marshal(*bytes.Buffer) error
 }
 
-type ConnectionStart struct {
+type methodKey uint32
+
+func createAMQPMethodKey(classID, methodID uint16) methodKey {
+	return methodKey(uint32(classID)<<16 | uint32(methodID))
+}
+
+type methodDecoder func(*bytes.Reader) (AMQPMethod, error)
+
+var methodDecoders = map[methodKey]methodDecoder{
+	createAMQPMethodKey(classConnection, 10): decodeConnStartRequest,
+	createAMQPMethodKey(classConnection, 11): decodeConnStartResponse,
+	createAMQPMethodKey(classConnection, 30): decodeConnTuneRequest,
+	createAMQPMethodKey(classConnection, 31): decodeConnTuneResponse,
+	createAMQPMethodKey(classConnection, 40): decodeConnOpenRequest,
+	createAMQPMethodKey(classConnection, 41): decodeConnOpenResponse,
+	createAMQPMethodKey(classConnection, 50): decodeConnCloseRequest,
+	createAMQPMethodKey(classConnection, 51): decodeConnCloseResponse,
+	createAMQPMethodKey(classChannel, 10):    decodeChanOpenRequest,
+	createAMQPMethodKey(classChannel, 11):    decodeChanOpenResponse,
+	createAMQPMethodKey(classChannel, 40):    decodeChanCloseRequest,
+	createAMQPMethodKey(classChannel, 41):    decodeChanCloseResponse,
+	createAMQPMethodKey(classExchange, 10):   decodeExchDeclareRequest,
+	createAMQPMethodKey(classExchange, 11):   decodeExchDeclareResponse,
+	createAMQPMethodKey(classQueue, 10):      decodeQueueDeclareRequest,
+	createAMQPMethodKey(classQueue, 11):      decodeQueueDeclareResponse,
+	createAMQPMethodKey(classQueue, 20):      decodeQueueBindRequest,
+	createAMQPMethodKey(classQueue, 21):      decodeQueueBindResponse,
+	createAMQPMethodKey(classBasic, 10):      decodeBasicQosRequest,
+	createAMQPMethodKey(classBasic, 11):      decodeBasicQosResponse,
+	createAMQPMethodKey(classBasic, 20):      decodeBasicConsumeRequest,
+	createAMQPMethodKey(classBasic, 21):      decodeBasicConsumeResponse,
+	createAMQPMethodKey(classBasic, 30):      decodeBasicCancelRequest,
+	createAMQPMethodKey(classBasic, 31):      decodeBasicCancelResponse,
+	createAMQPMethodKey(classBasic, 40):      decodeBasicPublish,
+	createAMQPMethodKey(classBasic, 60):      decodeBasicDeliver,
+	createAMQPMethodKey(classBasic, 80):      decodeBasicAck,
+	createAMQPMethodKey(classBasic, 90):      decodeBasicReject,
+	createAMQPMethodKey(classBasic, 120):     decodeBasicNack,
+	createAMQPMethodKey(classConfirm, 10):    decodeConfirmSelectRequest,
+	createAMQPMethodKey(classConfirm, 11):    decodeConfirmSelectResponse,
+}
+
+type ConnStartRequest struct {
 	VersionMajor     byte
 	VersionMinor     byte
 	ServerProperties Table
@@ -29,62 +71,62 @@ type ConnectionStart struct {
 	Locales          string
 }
 
-type ConnectionStartOk struct {
+type ConnStartResponse struct {
 	ClientProperties Table
 	Mechanism        string
 	Response         []byte
 	Locale           string
 }
 
-type ConnectionTune struct {
+type ConnTuneRequest struct {
 	ChannelMax uint16
 	FrameMax   uint32
 	Heartbeat  uint16
 }
 
-type ConnectionTuneOk struct {
+type ConnTuneResponse struct {
 	ChannelMax uint16
 	FrameMax   uint32
 	Heartbeat  uint16
 }
 
-type ConnectionOpen struct {
+type ConnOpenRequest struct {
 	VirtualHost  string
 	Capabilities string
 	Insist       bool
 }
 
-type ConnectionOpenOk struct {
+type ConnOpenResponse struct {
 	KnownHosts string
 }
 
-type ConnectionClose struct {
+type ConnCloseRequest struct {
 	ReplyCode   uint16
 	ReplyText   string
 	ClassIDRef  uint16
 	MethodIDRef uint16
 }
 
-type ConnectionCloseOk struct{}
+type ConnCloseResponse struct{}
 
-type ChannelOpen struct {
+type ChanOpenRequest struct {
 	OutOfBand string
 }
 
-type ChannelOpenOk struct {
+type ChanOpenResponse struct {
 	ChannelID string
 }
 
-type ChannelClose struct {
+type ChanCloseRequest struct {
 	ReplyCode   uint16
 	ReplyText   string
 	ClassIDRef  uint16
 	MethodIDRef uint16
 }
 
-type ChannelCloseOk struct{}
+type ChanCloseResponse struct{}
 
-type ExchangeDeclare struct {
+type ExchDeclareRequest struct {
 	Exchange   string
 	Type       string
 	Passive    bool
@@ -95,9 +137,9 @@ type ExchangeDeclare struct {
 	Arguments  Table
 }
 
-type ExchangeDeclareOk struct{}
+type ExchDeclareResponse struct{}
 
-type QueueDeclare struct {
+type QueueDeclareRequest struct {
 	Queue      string
 	Passive    bool
 	Durable    bool
@@ -107,13 +149,13 @@ type QueueDeclare struct {
 	Arguments  Table
 }
 
-type QueueDeclareOk struct {
+type QueueDeclareResponse struct {
 	Queue         string
 	MessageCount  uint32
 	ConsumerCount uint32
 }
 
-type QueueBind struct {
+type QueueBindRequest struct {
 	Queue      string
 	Exchange   string
 	RoutingKey string
@@ -121,17 +163,17 @@ type QueueBind struct {
 	Arguments  Table
 }
 
-type QueueBindOk struct{}
+type QueueBindResponse struct{}
 
-type BasicQos struct {
+type BasicQosRequest struct {
 	PrefetchSize  uint32
 	PrefetchCount uint16
 	Global        bool
 }
 
-type BasicQosOk struct{}
+type BasicQosResponse struct{}
 
-type BasicConsume struct {
+type BasicConsumeRequest struct {
 	Queue       string
 	ConsumerTag string
 	NoLocal     bool
@@ -141,16 +183,16 @@ type BasicConsume struct {
 	Arguments   Table
 }
 
-type BasicConsumeOk struct {
+type BasicConsumeResponse struct {
 	ConsumerTag string
 }
 
-type BasicCancel struct {
+type BasicCancelRequest struct {
 	ConsumerTag string
 	NoWait      bool
 }
 
-type BasicCancelOk struct {
+type BasicCancelResponse struct {
 	ConsumerTag string
 }
 
@@ -185,13 +227,13 @@ type BasicNack struct {
 	Requeue     bool
 }
 
-type ConfirmSelect struct {
+type ConfirmSelectRequest struct {
 	NoWait bool
 }
 
-type ConfirmSelectOk struct{}
+type ConfirmSelectResponse struct{}
 
-func EncodeMethodFrame(channel uint16, method Method) (Frame, error) {
+func EncodeMethodFrame(channel uint16, method AMQPMethod) (Frame, error) {
 	var payload bytes.Buffer
 	binary.Write(&payload, binary.BigEndian, method.ClassID())  //nolint:errcheck
 	binary.Write(&payload, binary.BigEndian, method.MethodID()) //nolint:errcheck
@@ -201,14 +243,13 @@ func EncodeMethodFrame(channel uint16, method Method) (Frame, error) {
 	return Frame{Type: FrameMethod, Channel: channel, Payload: payload.Bytes()}, nil
 }
 
-func DecodeMethodFrame(frame Frame) (Method, error) {
+func DecodeMethodFrame(frame Frame) (AMQPMethod, error) {
 	if frame.Type != FrameMethod {
 		return nil, fmt.Errorf("amqp: expected method frame, got type %d", frame.Type)
 	}
 
 	r := bytes.NewReader(frame.Payload)
-	var classID uint16
-	var methodID uint16
+	var classID, methodID uint16
 	if err := binary.Read(r, binary.BigEndian, &classID); err != nil {
 		return nil, err
 	}
@@ -216,95 +257,18 @@ func DecodeMethodFrame(frame Frame) (Method, error) {
 		return nil, err
 	}
 
-	switch classID {
-	case classConnection:
-		switch methodID {
-		case 10:
-			return decodeConnectionStart(r)
-		case 11:
-			return decodeConnectionStartOk(r)
-		case 30:
-			return decodeConnectionTune(r)
-		case 31:
-			return decodeConnectionTuneOk(r)
-		case 40:
-			return decodeConnectionOpen(r)
-		case 41:
-			return decodeConnectionOpenOk(r)
-		case 50:
-			return decodeConnectionClose(r)
-		case 51:
-			return ConnectionCloseOk{}, nil
-		}
-	case classChannel:
-		switch methodID {
-		case 10:
-			return decodeChannelOpen(r)
-		case 11:
-			return decodeChannelOpenOk(r)
-		case 40:
-			return decodeChannelClose(r)
-		case 41:
-			return ChannelCloseOk{}, nil
-		}
-	case classExchange:
-		switch methodID {
-		case 10:
-			return decodeExchangeDeclare(r)
-		case 11:
-			return ExchangeDeclareOk{}, nil
-		}
-	case classQueue:
-		switch methodID {
-		case 10:
-			return decodeQueueDeclare(r)
-		case 11:
-			return decodeQueueDeclareOk(r)
-		case 20:
-			return decodeQueueBind(r)
-		case 21:
-			return QueueBindOk{}, nil
-		}
-	case classBasic:
-		switch methodID {
-		case 10:
-			return decodeBasicQos(r)
-		case 11:
-			return BasicQosOk{}, nil
-		case 20:
-			return decodeBasicConsume(r)
-		case 21:
-			return decodeBasicConsumeOk(r)
-		case 30:
-			return decodeBasicCancel(r)
-		case 31:
-			return decodeBasicCancelOk(r)
-		case 40:
-			return decodeBasicPublish(r)
-		case 60:
-			return decodeBasicDeliver(r)
-		case 80:
-			return decodeBasicAck(r)
-		case 90:
-			return decodeBasicReject(r)
-		case 120:
-			return decodeBasicNack(r)
-		}
-	case classConfirm:
-		switch methodID {
-		case 10:
-			return decodeConfirmSelect(r)
-		case 11:
-			return ConfirmSelectOk{}, nil
-		}
+	dec, ok := methodDecoders[createAMQPMethodKey(classID, methodID)]
+	if !ok {
+		return nil, fmt.Errorf("amqp: unsupported method %d.%d", classID, methodID)
 	}
-
-	return nil, fmt.Errorf("amqp: unsupported method %d.%d", classID, methodID)
+	return dec(r)
 }
 
-func (m ConnectionStart) ClassID() uint16  { return classConnection }
-func (m ConnectionStart) MethodID() uint16 { return 10 }
-func (m ConnectionStart) marshal(w *bytes.Buffer) error {
+/* CLASS CONNECTION */
+
+func (m ConnStartRequest) ClassID() uint16  { return classConnection }
+func (m ConnStartRequest) MethodID() uint16 { return 10 }
+func (m ConnStartRequest) marshal(w *bytes.Buffer) error {
 	w.WriteByte(m.VersionMajor)
 	w.WriteByte(m.VersionMinor)
 	if err := writeTable(w, m.ServerProperties); err != nil {
@@ -316,7 +280,7 @@ func (m ConnectionStart) marshal(w *bytes.Buffer) error {
 	return writeLongstrString(w, m.Locales)
 }
 
-func decodeConnectionStart(r *bytes.Reader) (Method, error) {
+func decodeConnStartRequest(r *bytes.Reader) (AMQPMethod, error) {
 	major, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -337,7 +301,7 @@ func decodeConnectionStart(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ConnectionStart{
+	return ConnStartRequest{
 		VersionMajor:     major,
 		VersionMinor:     minor,
 		ServerProperties: props,
@@ -346,9 +310,9 @@ func decodeConnectionStart(r *bytes.Reader) (Method, error) {
 	}, nil
 }
 
-func (m ConnectionStartOk) ClassID() uint16  { return classConnection }
-func (m ConnectionStartOk) MethodID() uint16 { return 11 }
-func (m ConnectionStartOk) marshal(w *bytes.Buffer) error {
+func (m ConnStartResponse) ClassID() uint16  { return classConnection }
+func (m ConnStartResponse) MethodID() uint16 { return 11 }
+func (m ConnStartResponse) marshal(w *bytes.Buffer) error {
 	if err := writeTable(w, m.ClientProperties); err != nil {
 		return err
 	}
@@ -361,7 +325,7 @@ func (m ConnectionStartOk) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.Locale)
 }
 
-func decodeConnectionStartOk(r *bytes.Reader) (Method, error) {
+func decodeConnStartResponse(r *bytes.Reader) (AMQPMethod, error) {
 	props, err := readTable(r)
 	if err != nil {
 		return nil, err
@@ -378,7 +342,7 @@ func decodeConnectionStartOk(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ConnectionStartOk{
+	return ConnStartResponse{
 		ClientProperties: props,
 		Mechanism:        mechanism,
 		Response:         response,
@@ -386,51 +350,37 @@ func decodeConnectionStartOk(r *bytes.Reader) (Method, error) {
 	}, nil
 }
 
-func (m ConnectionTune) ClassID() uint16  { return classConnection }
-func (m ConnectionTune) MethodID() uint16 { return 30 }
-func (m ConnectionTune) marshal(w *bytes.Buffer) error {
-	binary.Write(w, binary.BigEndian, m.ChannelMax) //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.FrameMax)   //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.Heartbeat)  //nolint:errcheck
-	return nil
+func (m ConnTuneRequest) ClassID() uint16  { return classConnection }
+func (m ConnTuneRequest) MethodID() uint16 { return 30 }
+func (m ConnTuneRequest) marshal(w *bytes.Buffer) error {
+	return marshalTune(w, m.ChannelMax, m.FrameMax, m.Heartbeat)
 }
 
-func decodeConnectionTune(r *bytes.Reader) (Method, error) {
-	var m ConnectionTune
-	err := binary.Read(r, binary.BigEndian, &m.ChannelMax)
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.FrameMax)
+func decodeConnTuneRequest(r *bytes.Reader) (AMQPMethod, error) {
+	channelMax, frameMax, heartbeat, err := decodeTune(r)
+	if err != nil {
+		return nil, err
 	}
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.Heartbeat)
-	}
-	return m, err
+	return ConnTuneRequest{ChannelMax: channelMax, FrameMax: frameMax, Heartbeat: heartbeat}, nil
 }
 
-func (m ConnectionTuneOk) ClassID() uint16  { return classConnection }
-func (m ConnectionTuneOk) MethodID() uint16 { return 31 }
-func (m ConnectionTuneOk) marshal(w *bytes.Buffer) error {
-	binary.Write(w, binary.BigEndian, m.ChannelMax) //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.FrameMax)   //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.Heartbeat)  //nolint:errcheck
-	return nil
+func (m ConnTuneResponse) ClassID() uint16  { return classConnection }
+func (m ConnTuneResponse) MethodID() uint16 { return 31 }
+func (m ConnTuneResponse) marshal(w *bytes.Buffer) error {
+	return marshalTune(w, m.ChannelMax, m.FrameMax, m.Heartbeat)
 }
 
-func decodeConnectionTuneOk(r *bytes.Reader) (Method, error) {
-	var m ConnectionTuneOk
-	err := binary.Read(r, binary.BigEndian, &m.ChannelMax)
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.FrameMax)
+func decodeConnTuneResponse(r *bytes.Reader) (AMQPMethod, error) {
+	channelMax, frameMax, heartbeat, err := decodeTune(r)
+	if err != nil {
+		return nil, err
 	}
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.Heartbeat)
-	}
-	return m, err
+	return ConnTuneResponse{ChannelMax: channelMax, FrameMax: frameMax, Heartbeat: heartbeat}, nil
 }
 
-func (m ConnectionOpen) ClassID() uint16  { return classConnection }
-func (m ConnectionOpen) MethodID() uint16 { return 40 }
-func (m ConnectionOpen) marshal(w *bytes.Buffer) error {
+func (m ConnOpenRequest) ClassID() uint16  { return classConnection }
+func (m ConnOpenRequest) MethodID() uint16 { return 40 }
+func (m ConnOpenRequest) marshal(w *bytes.Buffer) error {
 	if err := writeShortstr(w, m.VirtualHost); err != nil {
 		return err
 	}
@@ -440,7 +390,7 @@ func (m ConnectionOpen) marshal(w *bytes.Buffer) error {
 	return writeBit(w, m.Insist)
 }
 
-func decodeConnectionOpen(r *bytes.Reader) (Method, error) {
+func decodeConnOpenRequest(r *bytes.Reader) (AMQPMethod, error) {
 	vhost, err := readShortstr(r)
 	if err != nil {
 		return nil, err
@@ -453,122 +403,110 @@ func decodeConnectionOpen(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ConnectionOpen{VirtualHost: vhost, Capabilities: caps, Insist: bit(bits, 0)}, nil
+	return ConnOpenRequest{VirtualHost: vhost, Capabilities: caps, Insist: bit(bits, 0)}, nil
 }
 
-func (m ConnectionOpenOk) ClassID() uint16  { return classConnection }
-func (m ConnectionOpenOk) MethodID() uint16 { return 41 }
-func (m ConnectionOpenOk) marshal(w *bytes.Buffer) error {
+func (m ConnOpenResponse) ClassID() uint16  { return classConnection }
+func (m ConnOpenResponse) MethodID() uint16 { return 41 }
+func (m ConnOpenResponse) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.KnownHosts)
 }
 
-func decodeConnectionOpenOk(r *bytes.Reader) (Method, error) {
+func decodeConnOpenResponse(r *bytes.Reader) (AMQPMethod, error) {
 	knownHosts, err := readShortstr(r)
 	if err != nil {
 		return nil, err
 	}
-	return ConnectionOpenOk{KnownHosts: knownHosts}, nil
+	return ConnOpenResponse{KnownHosts: knownHosts}, nil
 }
 
-func (m ConnectionClose) ClassID() uint16  { return classConnection }
-func (m ConnectionClose) MethodID() uint16 { return 50 }
-func (m ConnectionClose) marshal(w *bytes.Buffer) error {
-	binary.Write(w, binary.BigEndian, m.ReplyCode) //nolint:errcheck
-	if err := writeShortstr(w, m.ReplyText); err != nil {
-		return err
-	}
-	binary.Write(w, binary.BigEndian, m.ClassIDRef)  //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.MethodIDRef) //nolint:errcheck
-	return nil
+func (m ConnCloseRequest) ClassID() uint16  { return classConnection }
+func (m ConnCloseRequest) MethodID() uint16 { return 50 }
+func (m ConnCloseRequest) marshal(w *bytes.Buffer) error {
+	return marshalClose(w, m.ReplyCode, m.ReplyText, m.ClassIDRef, m.MethodIDRef)
 }
 
-func decodeConnectionClose(r *bytes.Reader) (Method, error) {
-	var m ConnectionClose
-	err := binary.Read(r, binary.BigEndian, &m.ReplyCode)
+func decodeConnCloseRequest(r *bytes.Reader) (AMQPMethod, error) {
+	replyCode, replyText, classRef, methodRef, err := decodeClose(r)
 	if err != nil {
 		return nil, err
 	}
-	m.ReplyText, err = readShortstr(r)
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.ClassIDRef)
-	}
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.MethodIDRef)
-	}
-	return m, err
+	return ConnCloseRequest{
+		ReplyCode:   replyCode,
+		ReplyText:   replyText,
+		ClassIDRef:  classRef,
+		MethodIDRef: methodRef,
+	}, nil
 }
 
-func (m ConnectionCloseOk) ClassID() uint16  { return classConnection }
-func (m ConnectionCloseOk) MethodID() uint16 { return 51 }
-func (m ConnectionCloseOk) marshal(w *bytes.Buffer) error {
+func (m ConnCloseResponse) ClassID() uint16  { return classConnection }
+func (m ConnCloseResponse) MethodID() uint16 { return 51 }
+func (m ConnCloseResponse) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func (m ChannelOpen) ClassID() uint16  { return classChannel }
-func (m ChannelOpen) MethodID() uint16 { return 10 }
-func (m ChannelOpen) marshal(w *bytes.Buffer) error {
+func decodeConnCloseResponse(*bytes.Reader) (AMQPMethod, error) { return ConnCloseResponse{}, nil }
+
+/* CLASS CHANNEL */
+
+func (m ChanOpenRequest) ClassID() uint16  { return classChannel }
+func (m ChanOpenRequest) MethodID() uint16 { return 10 }
+func (m ChanOpenRequest) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.OutOfBand)
 }
 
-func decodeChannelOpen(r *bytes.Reader) (Method, error) {
+func decodeChanOpenRequest(r *bytes.Reader) (AMQPMethod, error) {
 	outOfBand, err := readShortstr(r)
 	if err != nil {
 		return nil, err
 	}
-	return ChannelOpen{OutOfBand: outOfBand}, nil
+	return ChanOpenRequest{OutOfBand: outOfBand}, nil
 }
 
-func (m ChannelOpenOk) ClassID() uint16  { return classChannel }
-func (m ChannelOpenOk) MethodID() uint16 { return 11 }
-func (m ChannelOpenOk) marshal(w *bytes.Buffer) error {
+func (m ChanOpenResponse) ClassID() uint16  { return classChannel }
+func (m ChanOpenResponse) MethodID() uint16 { return 11 }
+func (m ChanOpenResponse) marshal(w *bytes.Buffer) error {
 	return writeLongstrString(w, m.ChannelID)
 }
 
-func decodeChannelOpenOk(r *bytes.Reader) (Method, error) {
+func decodeChanOpenResponse(r *bytes.Reader) (AMQPMethod, error) {
 	channelID, err := readLongstr(r)
 	if err != nil {
 		return nil, err
 	}
-	return ChannelOpenOk{ChannelID: string(channelID)}, nil
+	return ChanOpenResponse{ChannelID: string(channelID)}, nil
 }
 
-func (m ChannelClose) ClassID() uint16  { return classChannel }
-func (m ChannelClose) MethodID() uint16 { return 40 }
-func (m ChannelClose) marshal(w *bytes.Buffer) error {
-	binary.Write(w, binary.BigEndian, m.ReplyCode) //nolint:errcheck
-	if err := writeShortstr(w, m.ReplyText); err != nil {
-		return err
-	}
-	binary.Write(w, binary.BigEndian, m.ClassIDRef)  //nolint:errcheck
-	binary.Write(w, binary.BigEndian, m.MethodIDRef) //nolint:errcheck
-	return nil
+func (m ChanCloseRequest) ClassID() uint16  { return classChannel }
+func (m ChanCloseRequest) MethodID() uint16 { return 40 }
+func (m ChanCloseRequest) marshal(w *bytes.Buffer) error {
+	return marshalClose(w, m.ReplyCode, m.ReplyText, m.ClassIDRef, m.MethodIDRef)
 }
 
-func decodeChannelClose(r *bytes.Reader) (Method, error) {
-	var m ChannelClose
-	err := binary.Read(r, binary.BigEndian, &m.ReplyCode)
+func decodeChanCloseRequest(r *bytes.Reader) (AMQPMethod, error) {
+	replyCode, replyText, classRef, methodRef, err := decodeClose(r)
 	if err != nil {
 		return nil, err
 	}
-	m.ReplyText, err = readShortstr(r)
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.ClassIDRef)
-	}
-	if err == nil {
-		err = binary.Read(r, binary.BigEndian, &m.MethodIDRef)
-	}
-	return m, err
+	return ChanCloseRequest{
+		ReplyCode:   replyCode,
+		ReplyText:   replyText,
+		ClassIDRef:  classRef,
+		MethodIDRef: methodRef,
+	}, nil
 }
 
-func (m ChannelCloseOk) ClassID() uint16  { return classChannel }
-func (m ChannelCloseOk) MethodID() uint16 { return 41 }
-func (m ChannelCloseOk) marshal(w *bytes.Buffer) error {
+func (m ChanCloseResponse) ClassID() uint16  { return classChannel }
+func (m ChanCloseResponse) MethodID() uint16 { return 41 }
+func (m ChanCloseResponse) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func (m ExchangeDeclare) ClassID() uint16  { return classExchange }
-func (m ExchangeDeclare) MethodID() uint16 { return 10 }
-func (m ExchangeDeclare) marshal(w *bytes.Buffer) error {
+func decodeChanCloseResponse(*bytes.Reader) (AMQPMethod, error) { return ChanCloseResponse{}, nil }
+
+func (m ExchDeclareRequest) ClassID() uint16  { return classExchange }
+func (m ExchDeclareRequest) MethodID() uint16 { return 10 }
+func (m ExchDeclareRequest) marshal(w *bytes.Buffer) error {
 	binary.Write(w, binary.BigEndian, uint16(0)) //nolint:errcheck
 	if err := writeShortstr(w, m.Exchange); err != nil {
 		return err
@@ -582,7 +520,7 @@ func (m ExchangeDeclare) marshal(w *bytes.Buffer) error {
 	return writeTable(w, m.Arguments)
 }
 
-func decodeExchangeDeclare(r *bytes.Reader) (Method, error) {
+func decodeExchDeclareRequest(r *bytes.Reader) (AMQPMethod, error) {
 	if _, err := readUint16(r); err != nil {
 		return nil, err
 	}
@@ -602,7 +540,7 @@ func decodeExchangeDeclare(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ExchangeDeclare{
+	return ExchDeclareRequest{
 		Exchange:   exchange,
 		Type:       typ,
 		Passive:    bit(bits, 0),
@@ -614,15 +552,19 @@ func decodeExchangeDeclare(r *bytes.Reader) (Method, error) {
 	}, nil
 }
 
-func (m ExchangeDeclareOk) ClassID() uint16  { return classExchange }
-func (m ExchangeDeclareOk) MethodID() uint16 { return 11 }
-func (m ExchangeDeclareOk) marshal(w *bytes.Buffer) error {
+func (m ExchDeclareResponse) ClassID() uint16  { return classExchange }
+func (m ExchDeclareResponse) MethodID() uint16 { return 11 }
+func (m ExchDeclareResponse) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func (m QueueDeclare) ClassID() uint16  { return classQueue }
-func (m QueueDeclare) MethodID() uint16 { return 10 }
-func (m QueueDeclare) marshal(w *bytes.Buffer) error {
+func decodeExchDeclareResponse(*bytes.Reader) (AMQPMethod, error) { return ExchDeclareResponse{}, nil }
+
+/* CLASS QUEUE */
+
+func (m QueueDeclareRequest) ClassID() uint16  { return classQueue }
+func (m QueueDeclareRequest) MethodID() uint16 { return 10 }
+func (m QueueDeclareRequest) marshal(w *bytes.Buffer) error {
 	binary.Write(w, binary.BigEndian, uint16(0)) //nolint:errcheck
 	if err := writeShortstr(w, m.Queue); err != nil {
 		return err
@@ -633,7 +575,7 @@ func (m QueueDeclare) marshal(w *bytes.Buffer) error {
 	return writeTable(w, m.Arguments)
 }
 
-func decodeQueueDeclare(r *bytes.Reader) (Method, error) {
+func decodeQueueDeclareRequest(r *bytes.Reader) (AMQPMethod, error) {
 	if _, err := readUint16(r); err != nil {
 		return nil, err
 	}
@@ -649,7 +591,7 @@ func decodeQueueDeclare(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return QueueDeclare{
+	return QueueDeclareRequest{
 		Queue:      queue,
 		Passive:    bit(bits, 0),
 		Durable:    bit(bits, 1),
@@ -660,9 +602,9 @@ func decodeQueueDeclare(r *bytes.Reader) (Method, error) {
 	}, nil
 }
 
-func (m QueueDeclareOk) ClassID() uint16  { return classQueue }
-func (m QueueDeclareOk) MethodID() uint16 { return 11 }
-func (m QueueDeclareOk) marshal(w *bytes.Buffer) error {
+func (m QueueDeclareResponse) ClassID() uint16  { return classQueue }
+func (m QueueDeclareResponse) MethodID() uint16 { return 11 }
+func (m QueueDeclareResponse) marshal(w *bytes.Buffer) error {
 	if err := writeShortstr(w, m.Queue); err != nil {
 		return err
 	}
@@ -671,12 +613,12 @@ func (m QueueDeclareOk) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func decodeQueueDeclareOk(r *bytes.Reader) (Method, error) {
+func decodeQueueDeclareResponse(r *bytes.Reader) (AMQPMethod, error) {
 	queue, err := readShortstr(r)
 	if err != nil {
 		return nil, err
 	}
-	var m QueueDeclareOk
+	var m QueueDeclareResponse
 	m.Queue = queue
 	err = binary.Read(r, binary.BigEndian, &m.MessageCount)
 	if err == nil {
@@ -685,9 +627,9 @@ func decodeQueueDeclareOk(r *bytes.Reader) (Method, error) {
 	return m, err
 }
 
-func (m QueueBind) ClassID() uint16  { return classQueue }
-func (m QueueBind) MethodID() uint16 { return 20 }
-func (m QueueBind) marshal(w *bytes.Buffer) error {
+func (m QueueBindRequest) ClassID() uint16  { return classQueue }
+func (m QueueBindRequest) MethodID() uint16 { return 20 }
+func (m QueueBindRequest) marshal(w *bytes.Buffer) error {
 	binary.Write(w, binary.BigEndian, uint16(0)) //nolint:errcheck
 	if err := writeShortstr(w, m.Queue); err != nil {
 		return err
@@ -704,7 +646,7 @@ func (m QueueBind) marshal(w *bytes.Buffer) error {
 	return writeTable(w, m.Arguments)
 }
 
-func decodeQueueBind(r *bytes.Reader) (Method, error) {
+func decodeQueueBindRequest(r *bytes.Reader) (AMQPMethod, error) {
 	if _, err := readUint16(r); err != nil {
 		return nil, err
 	}
@@ -728,25 +670,29 @@ func decodeQueueBind(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return QueueBind{Queue: queue, Exchange: exchange, RoutingKey: routingKey, NoWait: bit(bits, 0), Arguments: args}, nil
+	return QueueBindRequest{Queue: queue, Exchange: exchange, RoutingKey: routingKey, NoWait: bit(bits, 0), Arguments: args}, nil
 }
 
-func (m QueueBindOk) ClassID() uint16  { return classQueue }
-func (m QueueBindOk) MethodID() uint16 { return 21 }
-func (m QueueBindOk) marshal(w *bytes.Buffer) error {
+func (m QueueBindResponse) ClassID() uint16  { return classQueue }
+func (m QueueBindResponse) MethodID() uint16 { return 21 }
+func (m QueueBindResponse) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func (m BasicQos) ClassID() uint16  { return classBasic }
-func (m BasicQos) MethodID() uint16 { return 10 }
-func (m BasicQos) marshal(w *bytes.Buffer) error {
+func decodeQueueBindResponse(*bytes.Reader) (AMQPMethod, error) { return QueueBindResponse{}, nil }
+
+/* CLASS BASIC */
+
+func (m BasicQosRequest) ClassID() uint16  { return classBasic }
+func (m BasicQosRequest) MethodID() uint16 { return 10 }
+func (m BasicQosRequest) marshal(w *bytes.Buffer) error {
 	binary.Write(w, binary.BigEndian, m.PrefetchSize)  //nolint:errcheck
 	binary.Write(w, binary.BigEndian, m.PrefetchCount) //nolint:errcheck
 	return writeBit(w, m.Global)
 }
 
-func decodeBasicQos(r *bytes.Reader) (Method, error) {
-	var m BasicQos
+func decodeBasicQosRequest(r *bytes.Reader) (AMQPMethod, error) {
+	var m BasicQosRequest
 	err := binary.Read(r, binary.BigEndian, &m.PrefetchSize)
 	if err == nil {
 		err = binary.Read(r, binary.BigEndian, &m.PrefetchCount)
@@ -759,15 +705,17 @@ func decodeBasicQos(r *bytes.Reader) (Method, error) {
 	return m, err
 }
 
-func (m BasicQosOk) ClassID() uint16  { return classBasic }
-func (m BasicQosOk) MethodID() uint16 { return 11 }
-func (m BasicQosOk) marshal(w *bytes.Buffer) error {
+func (m BasicQosResponse) ClassID() uint16  { return classBasic }
+func (m BasicQosResponse) MethodID() uint16 { return 11 }
+func (m BasicQosResponse) marshal(w *bytes.Buffer) error {
 	return nil
 }
 
-func (m BasicConsume) ClassID() uint16  { return classBasic }
-func (m BasicConsume) MethodID() uint16 { return 20 }
-func (m BasicConsume) marshal(w *bytes.Buffer) error {
+func decodeBasicQosResponse(*bytes.Reader) (AMQPMethod, error) { return BasicQosResponse{}, nil }
+
+func (m BasicConsumeRequest) ClassID() uint16  { return classBasic }
+func (m BasicConsumeRequest) MethodID() uint16 { return 20 }
+func (m BasicConsumeRequest) marshal(w *bytes.Buffer) error {
 	binary.Write(w, binary.BigEndian, uint16(0)) //nolint:errcheck
 	if err := writeShortstr(w, m.Queue); err != nil {
 		return err
@@ -781,7 +729,7 @@ func (m BasicConsume) marshal(w *bytes.Buffer) error {
 	return writeTable(w, m.Arguments)
 }
 
-func decodeBasicConsume(r *bytes.Reader) (Method, error) {
+func decodeBasicConsumeRequest(r *bytes.Reader) (AMQPMethod, error) {
 	if _, err := readUint16(r); err != nil {
 		return nil, err
 	}
@@ -801,7 +749,7 @@ func decodeBasicConsume(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BasicConsume{
+	return BasicConsumeRequest{
 		Queue:       queue,
 		ConsumerTag: consumerTag,
 		NoLocal:     bit(bits, 0),
@@ -812,30 +760,30 @@ func decodeBasicConsume(r *bytes.Reader) (Method, error) {
 	}, nil
 }
 
-func (m BasicConsumeOk) ClassID() uint16  { return classBasic }
-func (m BasicConsumeOk) MethodID() uint16 { return 21 }
-func (m BasicConsumeOk) marshal(w *bytes.Buffer) error {
+func (m BasicConsumeResponse) ClassID() uint16  { return classBasic }
+func (m BasicConsumeResponse) MethodID() uint16 { return 21 }
+func (m BasicConsumeResponse) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.ConsumerTag)
 }
 
-func decodeBasicConsumeOk(r *bytes.Reader) (Method, error) {
+func decodeBasicConsumeResponse(r *bytes.Reader) (AMQPMethod, error) {
 	consumerTag, err := readShortstr(r)
 	if err != nil {
 		return nil, err
 	}
-	return BasicConsumeOk{ConsumerTag: consumerTag}, nil
+	return BasicConsumeResponse{ConsumerTag: consumerTag}, nil
 }
 
-func (m BasicCancel) ClassID() uint16  { return classBasic }
-func (m BasicCancel) MethodID() uint16 { return 30 }
-func (m BasicCancel) marshal(w *bytes.Buffer) error {
+func (m BasicCancelRequest) ClassID() uint16  { return classBasic }
+func (m BasicCancelRequest) MethodID() uint16 { return 30 }
+func (m BasicCancelRequest) marshal(w *bytes.Buffer) error {
 	if err := writeShortstr(w, m.ConsumerTag); err != nil {
 		return err
 	}
 	return writeBit(w, m.NoWait)
 }
 
-func decodeBasicCancel(r *bytes.Reader) (Method, error) {
+func decodeBasicCancelRequest(r *bytes.Reader) (AMQPMethod, error) {
 	consumerTag, err := readShortstr(r)
 	if err != nil {
 		return nil, err
@@ -844,22 +792,23 @@ func decodeBasicCancel(r *bytes.Reader) (Method, error) {
 	if err != nil {
 		return nil, err
 	}
-	return BasicCancel{ConsumerTag: consumerTag, NoWait: bit(bits, 0)}, nil
+	return BasicCancelRequest{ConsumerTag: consumerTag, NoWait: bit(bits, 0)}, nil
 }
 
-func (m BasicCancelOk) ClassID() uint16  { return classBasic }
-func (m BasicCancelOk) MethodID() uint16 { return 31 }
-func (m BasicCancelOk) marshal(w *bytes.Buffer) error {
+func (m BasicCancelResponse) ClassID() uint16  { return classBasic }
+func (m BasicCancelResponse) MethodID() uint16 { return 31 }
+func (m BasicCancelResponse) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.ConsumerTag)
 }
 
-func decodeBasicCancelOk(r *bytes.Reader) (Method, error) {
+func decodeBasicCancelResponse(r *bytes.Reader) (AMQPMethod, error) {
 	consumerTag, err := readShortstr(r)
 	if err != nil {
 		return nil, err
 	}
-	return BasicCancelOk{ConsumerTag: consumerTag}, nil
+	return BasicCancelResponse{ConsumerTag: consumerTag}, nil
 }
+
 
 func (m BasicPublish) ClassID() uint16  { return classBasic }
 func (m BasicPublish) MethodID() uint16 { return 40 }
@@ -874,7 +823,7 @@ func (m BasicPublish) marshal(w *bytes.Buffer) error {
 	return writeBits(w, m.Mandatory, m.Immediate)
 }
 
-func decodeBasicPublish(r *bytes.Reader) (Method, error) {
+func decodeBasicPublish(r *bytes.Reader) (AMQPMethod, error) {
 	if _, err := readUint16(r); err != nil {
 		return nil, err
 	}
@@ -909,7 +858,7 @@ func (m BasicDeliver) marshal(w *bytes.Buffer) error {
 	return writeShortstr(w, m.RoutingKey)
 }
 
-func decodeBasicDeliver(r *bytes.Reader) (Method, error) {
+func decodeBasicDeliver(r *bytes.Reader) (AMQPMethod, error) {
 	consumerTag, err := readShortstr(r)
 	if err != nil {
 		return nil, err
@@ -940,7 +889,7 @@ func (m BasicAck) marshal(w *bytes.Buffer) error {
 	return writeBit(w, m.Multiple)
 }
 
-func decodeBasicAck(r *bytes.Reader) (Method, error) {
+func decodeBasicAck(r *bytes.Reader) (AMQPMethod, error) {
 	var m BasicAck
 	err := binary.Read(r, binary.BigEndian, &m.DeliveryTag)
 	if err == nil {
@@ -958,7 +907,7 @@ func (m BasicReject) marshal(w *bytes.Buffer) error {
 	return writeBit(w, m.Requeue)
 }
 
-func decodeBasicReject(r *bytes.Reader) (Method, error) {
+func decodeBasicReject(r *bytes.Reader) (AMQPMethod, error) {
 	var m BasicReject
 	err := binary.Read(r, binary.BigEndian, &m.DeliveryTag)
 	if err == nil {
@@ -976,7 +925,7 @@ func (m BasicNack) marshal(w *bytes.Buffer) error {
 	return writeBits(w, m.Multiple, m.Requeue)
 }
 
-func decodeBasicNack(r *bytes.Reader) (Method, error) {
+func decodeBasicNack(r *bytes.Reader) (AMQPMethod, error) {
 	var m BasicNack
 	err := binary.Read(r, binary.BigEndian, &m.DeliveryTag)
 	if err == nil {
@@ -988,24 +937,68 @@ func decodeBasicNack(r *bytes.Reader) (Method, error) {
 	return m, err
 }
 
-func (m ConfirmSelect) ClassID() uint16  { return classConfirm }
-func (m ConfirmSelect) MethodID() uint16 { return 10 }
-func (m ConfirmSelect) marshal(w *bytes.Buffer) error {
+/* CLASS CONFIRM */
+
+func (m ConfirmSelectRequest) ClassID() uint16  { return classConfirm }
+func (m ConfirmSelectRequest) MethodID() uint16 { return 10 }
+func (m ConfirmSelectRequest) marshal(w *bytes.Buffer) error {
 	return writeBit(w, m.NoWait)
 }
 
-func decodeConfirmSelect(r *bytes.Reader) (Method, error) {
+func decodeConfirmSelectRequest(r *bytes.Reader) (AMQPMethod, error) {
 	bits, err := readBits(r)
 	if err != nil {
 		return nil, err
 	}
-	return ConfirmSelect{NoWait: bit(bits, 0)}, nil
+	return ConfirmSelectRequest{NoWait: bit(bits, 0)}, nil
 }
 
-func (m ConfirmSelectOk) ClassID() uint16  { return classConfirm }
-func (m ConfirmSelectOk) MethodID() uint16 { return 11 }
-func (m ConfirmSelectOk) marshal(w *bytes.Buffer) error {
+func (m ConfirmSelectResponse) ClassID() uint16               { return classConfirm }
+func (m ConfirmSelectResponse) MethodID() uint16              { return 11 }
+func (m ConfirmSelectResponse) marshal(w *bytes.Buffer) error { return nil }
+
+func decodeConfirmSelectResponse(*bytes.Reader) (AMQPMethod, error) { return ConfirmSelectResponse{}, nil }
+
+func marshalClose(w *bytes.Buffer, replyCode uint16, replyText string, classRef, methodRef uint16) error {
+	binary.Write(w, binary.BigEndian, replyCode) //nolint:errcheck
+	if err := writeShortstr(w, replyText); err != nil {
+		return err
+	}
+	binary.Write(w, binary.BigEndian, classRef)  //nolint:errcheck
+	binary.Write(w, binary.BigEndian, methodRef) //nolint:errcheck
 	return nil
+}
+
+func decodeClose(r *bytes.Reader) (replyCode uint16, replyText string, classRef, methodRef uint16, err error) {
+	if err = binary.Read(r, binary.BigEndian, &replyCode); err != nil {
+		return
+	}
+	if replyText, err = readShortstr(r); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &classRef); err != nil {
+		return
+	}
+	err = binary.Read(r, binary.BigEndian, &methodRef)
+	return
+}
+
+func marshalTune(w *bytes.Buffer, channelMax uint16, frameMax uint32, heartbeat uint16) error {
+	binary.Write(w, binary.BigEndian, channelMax) //nolint:errcheck
+	binary.Write(w, binary.BigEndian, frameMax)   //nolint:errcheck
+	binary.Write(w, binary.BigEndian, heartbeat)  //nolint:errcheck
+	return nil
+}
+
+func decodeTune(r *bytes.Reader) (channelMax uint16, frameMax uint32, heartbeat uint16, err error) {
+	if err = binary.Read(r, binary.BigEndian, &channelMax); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &frameMax); err != nil {
+		return
+	}
+	err = binary.Read(r, binary.BigEndian, &heartbeat)
+	return
 }
 
 func writeBit(w *bytes.Buffer, value bool) error {
